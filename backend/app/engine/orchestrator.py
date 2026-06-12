@@ -10,7 +10,6 @@ import uuid
 from ..llm import LLMClient
 from ..models import Branch, Insight
 from ..problems import PROBLEMS
-from ..sandbox import run_solver
 from ..store import Run
 from . import agents
 
@@ -178,11 +177,14 @@ class Orchestrator:
                                "approach": meta.get("approach"),
                                "expectation": meta.get("expectation")})
 
+        detail = None
         if not code:
             result = {"score": None, "valid": False, "error": "no python code produced",
                       "exec_time": 0.0}
         else:
-            out = run_solver(code, self.instance, self.cfg["experiment_timeout_s"])
+            out = self.problem.execute(code, self.instance,
+                                       self.cfg["experiment_timeout_s"])
+            detail = out.get("detail")
             if out["error"]:
                 result = {"score": None, "valid": False, "error": out["error"],
                           "exec_time": out["exec_time"]}
@@ -224,6 +226,7 @@ class Orchestrator:
             "baseline_score": self.baseline_score,
             "branch_best_score": b.best_score,
             "improvement_pct": self._improvement_pct(result["score"]) if result["valid"] else None,
+            "detail": detail,
         }
         if result["valid"]:
             ev_payload["solution"] = result["solution"]
@@ -341,6 +344,17 @@ class Orchestrator:
                 "target_met": (results["improvement_pct"] or 0) >=
                               results["target_improvement_pct"],
             })
+            # held-out verification: does the winning solver generalize to
+            # instances it never saw during the run?
+            if winner.best_code:
+                try:
+                    holdout = self.problem.holdout_eval(
+                        winner.best_code, self.instance,
+                        self.cfg["experiment_timeout_s"])
+                except Exception as e:
+                    holdout = {"error": f"{type(e).__name__}: {e}"}
+                if holdout is not None:
+                    results["holdout"] = holdout
             winner.status = "winner"
             self.run.emit("branch.winner", agent="supervisor", branch_id=winner.id,
                           payload={"score": winner.best_score,

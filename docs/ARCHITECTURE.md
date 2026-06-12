@@ -117,6 +117,18 @@ The branch graph uses fixed lanes per branch (x) and event order (y) — a git-l
 layout that stays readable regardless of run size. Merges draw two in-edges; collapses
 terminate a lane with a ⊘ node; the winner gets a ★ node.
 
+## Benchmark problems (tsp_benchmark)
+
+`TSPBenchmark` plugs into the same `Problem` interface but evaluates over a SET of
+TSPLIB95 instances: `generate_instance` loads dev + held-out instances,
+`execute` runs the agent's `solve()` separately per dev instance (one subprocess
+each, per-instance timeout) and attaches a per-instance `detail` to
+`experiment.completed`, and `evaluate` returns the mean gap %% vs the known optima.
+`holdout_eval` (called by the orchestrator at `run.completed` with the winner's
+code) re-runs the solver on the held-out instances against the same
+nearest-neighbor + 2-opt baseline and reports improved/worsened counts plus a
+`generalizes` verdict. Sandbox temp dirs live in `backend/data/tmp` (project-local).
+
 ## Mock mode
 
 `LLM_MOCK=1` (or leaving `ANTHROPIC_API_KEY` unset) replaces the LLM with a deterministic

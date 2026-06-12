@@ -5,7 +5,10 @@
       "mcp__visualize__show_widget",
       "PowerShell(git init)",
       "PowerShell(git add -A)",
-      "PowerShell(git commit -m \"Initial commit: Long Run Agent Lab \\(pre UI redesign\\)\")"
+      "PowerShell(git commit -m \"Initial commit: Long Run Agent Lab \\(pre UI redesign\\)\")",
+      "PowerShell(New-Item -ItemType Directory -Force D:\\\\OneDrive\\\\Documents\\\\Proyectos\\\\LongRunAgent_Lab\\\\backend\\\\data\\\\tsplib | Out-Null; $names = @\\(\"eil51\",\"berlin52\",\"st70\",\"eil76\",\"pr76\",\"rat99\",\"kroA100\",\"kroB100\",\"rd100\",\"eil101\",\"lin105\",\"ch130\",\"ch150\",\"kroA150\",\"rat195\",\"d198\",\"kroA200\"\\); $ok=@\\(\\); $fail=@\\(\\); foreach \\($n in $names\\) { try { Invoke-WebRequest -Uri \"https://raw.githubusercontent.com/mastqe/tsplib/master/$n.tsp\" -OutFile \"D:\\\\OneDrive\\\\Documents\\\\Proyectos\\\\LongRunAgent_Lab\\\\backend\\\\data\\\\tsplib\\\\$n.tsp\" -UseBasicParsing -ErrorAction Stop; $ok += $n } catch { $fail += $n } }; \"ok: $\\($ok -join ', '\\)\"; \"fail: $\\($fail -join ', '\\)\")",
+      "PowerShell(Get-PSDrive C, D | Select-Object Name, @{n='FreeGB';e={[math]::Round\\($_.Free/1GB,1\\)}}; $env:TEMP)",
+      "mcp__Claude_Preview__preview_start"
     ]
   }
 }

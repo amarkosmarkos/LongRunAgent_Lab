@@ -8,6 +8,15 @@
       "cwd": "frontend",
       "port": 5173,
       "autoPort": true
+    },
+    {
+      "name": "backend-mock",
+      "runtimeExecutable": "D:\\OneDrive\\Documents\\Proyectos\\LongRunAgent_Lab\\backend\\.venv\\Scripts\\uvicorn.exe",
+      "runtimeArgs": ["app.main:app", "--port", "8002"],
+      "cwd": "backend",
+      "env": { "LLM_MOCK": "1" },
+      "port": 8002,
+      "autoPort": false
     }
   ]
 }

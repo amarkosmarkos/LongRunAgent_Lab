@@ -235,6 +235,61 @@ export function CostPanel({ state }) {
   );
 }
 
+// ------------------------------------------------------------- Held-out
+function HoldoutReport({ holdout }) {
+  if (!holdout) return null;
+  if (holdout.error)
+    return (
+      <div className="panelcard">
+        <h4>Held-out verification</h4>
+        <div style={{ color: "var(--red)" }}>{holdout.error}</div>
+      </div>
+    );
+  const s = holdout.summary || {};
+  return (
+    <div className="panelcard">
+      <h4>Held-out verification (instances the agents never saw)</h4>
+      <div style={{ marginBottom: 8 }}>
+        <span className={`badge ${s.generalizes ? "winner" : "collapsed"}`}
+          style={{ marginLeft: 0 }}>
+          {s.generalizes ? "generalizes" : "does not generalize"}
+        </span>
+        <span className="sub" style={{ marginLeft: 10 }}>
+          mean gap {fmtScore(s.mean_baseline_gap)}% → {fmtScore(s.mean_winner_gap)}% ·
+          {" "}{s.improved} improved · {s.worsened} worsened
+          {s.failed ? ` · ${s.failed} failed` : ""}
+        </span>
+      </div>
+      <table className="htable">
+        <thead>
+          <tr><th>instance</th><th>cities</th><th>optimum</th>
+            <th>baseline gap</th><th>winner gap</th><th>outcome</th></tr>
+        </thead>
+        <tbody>
+          {(holdout.instances || []).map((r) => (
+            <tr key={r.name}>
+              <td>{r.name}</td>
+              <td>{r.n_cities}</td>
+              <td>{r.optimum}</td>
+              <td>{fmtScore(r.baseline_gap)}%</td>
+              <td>{r.winner_gap != null ? `${fmtScore(r.winner_gap)}%` : (r.error || "—")}</td>
+              <td style={{
+                color: r.outcome === "improved" ? "var(--green)" :
+                  r.outcome === "worsened" || r.outcome === "failed"
+                    ? "var(--red)" : "var(--muted)",
+              }}>{r.outcome}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <div className="sub" style={{ marginTop: 6 }}>
+        A modification only counts if it beats the baseline on instances that
+        were not used during development.
+      </div>
+    </div>
+  );
+}
+
 // -------------------------------------------------------------- Results
 export function ResultsPanel({ state }) {
   const { results, baseline, instance, bestSolution, bestScore } = state;
@@ -283,6 +338,7 @@ export function ResultsPanel({ state }) {
           </div>
         </div>
       )}
+      {results?.holdout && <HoldoutReport holdout={results.holdout} />}
       <TourCanvas instance={instance} baseline={baseline}
         bestSolution={results?.best_solution || bestSolution} bestScore={bestScore} />
     </div>
@@ -344,6 +400,28 @@ export function DetailPanel({ state, events, selectedSeq }) {
               <span className="v" style={{ color: "var(--red)" }}>{p.error}</span></>)}
           </div>
         </div>
+        {p.detail && (
+          <div className="panelcard">
+            <h4>Per-instance results</h4>
+            <table className="htable">
+              <thead>
+                <tr><th>instance</th><th>length</th><th>optimum</th>
+                  <th>gap</th><th>time</th></tr>
+              </thead>
+              <tbody>
+                {Object.entries(p.detail).map(([name, d]) => (
+                  <tr key={name}>
+                    <td>{name}</td>
+                    <td>{d.length}</td>
+                    <td>{d.optimum}</td>
+                    <td>{fmtScore(d.gap_pct)}%</td>
+                    <td>{d.time_s}s</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
         {critique && (
           <div className="panelcard">
             <h4><AgentBadge name="critic" small /> Critic verdict</h4>

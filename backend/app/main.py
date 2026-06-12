@@ -27,7 +27,14 @@ def health():
 
 @app.get("/api/problems")
 def problems():
-    return [{"name": p.name, "description": p.description} for p in PROBLEMS.values()]
+    from .problems.tsp import DEFAULT_DEV, DEFAULT_HOLDOUT, tsplib_catalog
+    return {
+        "problems": [{"name": p.name, "description": p.description}
+                     for p in PROBLEMS.values()],
+        "tsplib": {"catalog": tsplib_catalog(),
+                   "default_dev": DEFAULT_DEV,
+                   "default_holdout": DEFAULT_HOLDOUT},
+    }
 
 
 @app.get("/api/runs")

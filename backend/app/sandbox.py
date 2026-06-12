@@ -15,6 +15,11 @@ import tempfile
 import time
 from pathlib import Path
 
+# Keep sandbox temp dirs inside the project (the system temp may live on a
+# different, possibly full, drive).
+TMP_ROOT = Path(__file__).resolve().parent.parent / "data" / "tmp"
+TMP_ROOT.mkdir(parents=True, exist_ok=True)
+
 HARNESS = r"""
 import json, sys
 
@@ -39,7 +44,7 @@ except Exception as e:
 
 def run_solver(code: str, instance: dict, timeout_s: int) -> dict:
     """Returns {solution|None, error|None, exec_time}."""
-    with tempfile.TemporaryDirectory() as tmp:
+    with tempfile.TemporaryDirectory(dir=TMP_ROOT) as tmp:
         tmp = Path(tmp)
         (tmp / "harness.py").write_text(HARNESS, encoding="utf-8")
         (tmp / "payload.json").write_text(

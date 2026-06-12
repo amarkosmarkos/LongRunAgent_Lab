@@ -92,6 +92,23 @@ Experimenter agents write Python that is executed on your machine (subprocess +
 timeout — process isolation, **not** a security sandbox). Run it locally for research,
 inspect generated code in the UI, and don't expose the backend publicly.
 
+## TSPLIB benchmark mode
+
+Select **TSPLIB benchmark** in the new-run form (problem `tsp_benchmark`) to run
+against real TSPLIB95 instances with known optima (files in `backend/data/tsplib/`):
+
+- **Score = mean gap %** above the known optimum across the dev instances
+  (TSPLIB rounded-integer metric), so 0 means optimal on every instance.
+- **Strong baseline**: nearest-neighbor + 2-opt to local optimum (~6.5% mean gap),
+  so agents must invent something beyond plain 2-opt.
+- **Held-out verification**: when the run ends, the winning solver code is
+  re-executed on instances the agents never saw. The Results tab reports
+  per-instance gaps, improved/worsened counts, and a generalizes / does-not-generalize
+  verdict — improvements that only work on the dev set are exposed.
+
+Dev and held-out sets are configurable per run; defaults in
+`backend/app/problems/tsp.py` (`DEFAULT_DEV`, `DEFAULT_HOLDOUT`).
+
 ## Adding a new problem
 
 Implement `Problem` (`generate_instance`, `baseline`, `validate`, `evaluate`,

@@ -5,6 +5,7 @@ const json = (r) => {
 
 export const api = {
   health: () => fetch("/api/health").then(json),
+  problems: () => fetch("/api/problems").then(json),
   listRuns: () => fetch("/api/runs").then(json),
   createRun: (config) =>
     fetch("/api/runs", {

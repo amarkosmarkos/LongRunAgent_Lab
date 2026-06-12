@@ -243,6 +243,17 @@ pre.code {
 .badge.merged { background: var(--purple-soft); color: var(--purple); }
 .badge.winner { background: var(--amber-soft); color: var(--gold); }
 
+/* ---- result tables ---- */
+.htable { width: 100%; border-collapse: collapse; font-size: 12px; }
+.htable th {
+  text-align: left; color: var(--muted); font-weight: 600;
+  padding: 4px 8px 4px 0; border-bottom: 1px solid var(--border);
+}
+.htable td {
+  padding: 4px 8px 4px 0; border-bottom: 1px solid var(--surface2);
+  font-family: var(--mono);
+}
+
 /* ---- graph tooltip ---- */
 .gtooltip {
   position: absolute; z-index: 5; pointer-events: none;

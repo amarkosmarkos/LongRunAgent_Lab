@@ -1,10 +1,18 @@
-"""Euclidean TSP. Baseline: nearest-neighbor construction from city 0."""
+"""Euclidean TSP problems.
+
+- TSP: random uniform instance, nearest-neighbor baseline (easy mode).
+- TSPBenchmark: TSPLIB95 suite with known optima, nearest-neighbor + 2-opt
+  baseline, scored as mean gap %% over a dev set, with held-out verification
+  of the winning solver at the end of the run (guards against overfitting).
+"""
 from __future__ import annotations
 
 import math
 import random
 
 from .base import Problem
+from .tsplib import (available_instances, gap_pct, load_instance, nn_2opt_tour,
+                     tour_length_euc2d)
 
 
 def tour_length(cities: list[list[float]], tour: list[int]) -> float:
@@ -75,4 +83,173 @@ class TSP(Problem):
         )
 
 
-PROBLEMS = {"tsp": TSP()}
+DEFAULT_DEV = ["berlin52", "st70", "eil76", "kroA100", "rd100"]
+DEFAULT_HOLDOUT = ["eil51", "pr76", "rat99", "kroB100", "eil101", "lin105"]
+
+
+class TSPBenchmark(Problem):
+    name = "tsp_benchmark"
+    description = (
+        "Euclidean TSP on the TSPLIB95 benchmark (known optima). The solver is "
+        "run on several dev instances; score = mean gap %% above the known "
+        "optimum (lower is better, 0 = optimal on every instance). Distances "
+        "use the TSPLIB metric: each edge rounded to the nearest integer. "
+        "The winning solver is re-evaluated on held-out instances at the end."
+    )
+
+    # ------------------------------------------------------------ instance
+    def generate_instance(self, params: dict) -> dict:
+        dev = params.get("dev") or DEFAULT_DEV
+        holdout = params.get("holdout") or DEFAULT_HOLDOUT
+        overlap = set(dev) & set(holdout)
+        if overlap:
+            raise ValueError(f"instances in both dev and holdout: {sorted(overlap)}")
+        instances = {n: load_instance(n) for n in [*dev, *holdout]}
+        return {"benchmark": True, "dev": list(dev), "holdout": list(holdout),
+                "instances": instances}
+
+    def _dev_items(self, instance: dict):
+        return [(n, instance["instances"][n]) for n in instance["dev"]]
+
+    def baseline(self, instance: dict):
+        tours, gaps = {}, []
+        for name, inst in self._dev_items(instance):
+            tour = nn_2opt_tour(inst["cities"])
+            tours[name] = tour
+            gaps.append(gap_pct(tour_length_euc2d(inst["cities"], tour),
+                                inst["optimum"]))
+        score = round(sum(gaps) / len(gaps), 3)
+        return tours, score, "nearest-neighbor + 2-opt (mean gap %% vs optimum)"
+
+    # ----------------------------------------------------------- scoring
+    def validate(self, instance: dict, solution) -> str | None:
+        if not isinstance(solution, dict):
+            return "solution is not a per-instance dict"
+        for name, inst in self._dev_items(instance):
+            tour = solution.get(name)
+            n = len(inst["cities"])
+            if not isinstance(tour, list):
+                return f"{name}: no tour produced"
+            if len(tour) != n or sorted(tour) != list(range(n)):
+                return f"{name}: tour is not a permutation of 0..{n - 1}"
+        return None
+
+    def evaluate(self, instance: dict, solution) -> float:
+        gaps = [gap_pct(tour_length_euc2d(inst["cities"], solution[name]),
+                        inst["optimum"])
+                for name, inst in self._dev_items(instance)]
+        return round(sum(gaps) / len(gaps), 3)
+
+    def instance_stats(self, instance: dict) -> str:
+        sizes = ", ".join(
+            f"{n} ({len(instance['instances'][n]['cities'])} cities)"
+            for n in instance["dev"])
+        return (f"TSPLIB95 dev set: {sizes}. Optima are known; score is the "
+                f"mean gap %% above optimum across all dev instances "
+                f"(TSPLIB rounded-integer metric). "
+                f"{len(instance['holdout'])} held-out instances are kept "
+                f"hidden for final verification.")
+
+    def solver_contract(self) -> str:
+        return (
+            "Write pure-Python (stdlib only) defining exactly one entry point:\n"
+            "    def solve(cities: list[list[float]]) -> list[int]\n"
+            "`cities` is a list of [x, y] coordinates. Return a tour: a "
+            "permutation of all city indices 0..N-1 (closed tour implied). "
+            "Your solve() is executed SEPARATELY on each benchmark instance "
+            "(50-100 cities each) and must finish within the per-instance time "
+            "limit. Edge lengths are rounded to the nearest integer (TSPLIB "
+            "EUC_2D), and your tour competes against the known optimum. "
+            "The baseline is already nearest-neighbor + 2-opt, so you must go "
+            "beyond plain 2-opt (e.g. Or-opt moves, candidate lists, "
+            "don't-look bits, perturbation/restarts within the time budget). "
+            "Generalize: the final solver is re-tested on hidden instances. "
+            "No imports beyond the standard library; no I/O; no threads."
+        )
+
+    # ---------------------------------------------------------- execution
+    def execute(self, code: str, instance: dict, timeout_s: int) -> dict:
+        from ..sandbox import run_solver
+        solutions, detail, total = {}, {}, 0.0
+        for name, inst in self._dev_items(instance):
+            out = run_solver(code, {"cities": inst["cities"]}, timeout_s)
+            total += out["exec_time"]
+            if out["error"]:
+                return {"solution": None,
+                        "error": f"{name}: {out['error']}",
+                        "exec_time": round(total, 3), "detail": detail or None}
+            solutions[name] = out["solution"]
+            length = tour_length_euc2d(inst["cities"], out["solution"])
+            detail[name] = {"length": length, "optimum": inst["optimum"],
+                            "gap_pct": gap_pct(length, inst["optimum"]),
+                            "time_s": out["exec_time"]}
+        return {"solution": solutions, "error": None,
+                "exec_time": round(total, 3), "detail": detail}
+
+    # ------------------------------------------------------- held-out set
+    def holdout_eval(self, code: str, instance: dict, timeout_s: int) -> dict | None:
+        """Run the winning solver on instances it has never seen, against the
+        same nearest-neighbor + 2-opt baseline. The orchestrator attaches the
+        report to run.completed."""
+        from ..sandbox import run_solver
+        import time as _time
+        per_instance = []
+        improved = worsened = unchanged = failed = 0
+        b_gaps, w_gaps = [], []
+        for name in instance["holdout"]:
+            inst = instance["instances"][name]
+            t0 = _time.time()
+            b_tour = nn_2opt_tour(inst["cities"])
+            b_time = round(_time.time() - t0, 3)
+            b_gap = gap_pct(tour_length_euc2d(inst["cities"], b_tour),
+                            inst["optimum"])
+            row = {"name": name, "n_cities": len(inst["cities"]),
+                   "optimum": inst["optimum"],
+                   "baseline_gap": b_gap, "baseline_time": b_time}
+            out = run_solver(code, {"cities": inst["cities"]}, timeout_s)
+            tour = out["solution"]
+            n = len(inst["cities"])
+            valid = (isinstance(tour, list) and len(tour) == n
+                     and sorted(tour) == list(range(n)))
+            if out["error"] or not valid:
+                failed += 1
+                row.update({"winner_gap": None, "winner_time": out["exec_time"],
+                            "error": out["error"] or "invalid tour",
+                            "outcome": "failed"})
+            else:
+                w_gap = gap_pct(tour_length_euc2d(inst["cities"], tour),
+                                inst["optimum"])
+                outcome = ("improved" if w_gap < b_gap
+                           else "worsened" if w_gap > b_gap else "unchanged")
+                improved += outcome == "improved"
+                worsened += outcome == "worsened"
+                unchanged += outcome == "unchanged"
+                b_gaps.append(b_gap)
+                w_gaps.append(w_gap)
+                row.update({"winner_gap": w_gap, "winner_time": out["exec_time"],
+                            "error": None, "outcome": outcome})
+            per_instance.append(row)
+        n_scored = len(w_gaps)
+        return {
+            "instances": per_instance,
+            "summary": {
+                "mean_baseline_gap": round(sum(b_gaps) / n_scored, 3) if n_scored else None,
+                "mean_winner_gap": round(sum(w_gaps) / n_scored, 3) if n_scored else None,
+                "improved": improved, "worsened": worsened,
+                "unchanged": unchanged, "failed": failed,
+                "generalizes": failed == 0 and n_scored > 0 and
+                               sum(w_gaps) / n_scored < sum(b_gaps) / n_scored,
+            },
+        }
+
+PROBLEMS = {"tsp": TSP(), "tsp_benchmark": TSPBenchmark()}
+
+
+def tsplib_catalog() -> list[dict]:
+    """For the API: available TSPLIB instances with sizes and optima."""
+    out = []
+    for n in available_instances():
+        inst = load_instance(n)
+        out.append({"name": n, "n_cities": len(inst["cities"]),
+                    "optimum": inst["optimum"]})
+    return out

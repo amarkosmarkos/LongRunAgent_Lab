@@ -86,12 +86,16 @@ export function narrate(ev, state) {
       };
     case "run.completed": {
       const r = p.results || {};
-      return {
-        agent: null,
-        text: `Run completed — ${r.improvement_pct}% improvement, ` +
-          `target ${r.target_met ? "met" : "not met"}, ` +
-          `total cost $${(r.total_cost_usd ?? 0).toFixed(2)}.`,
-      };
+      let text = `Run completed — ${r.improvement_pct}% improvement, ` +
+        `target ${r.target_met ? "met" : "not met"}, ` +
+        `total cost $${(r.total_cost_usd ?? 0).toFixed(2)}.`;
+      const h = r.holdout?.summary;
+      if (h)
+        text += ` Held-out check: ${h.improved} improved, ${h.worsened} worsened` +
+          `${h.failed ? `, ${h.failed} failed` : ""} — the winner ` +
+          `${h.generalizes ? "GENERALIZES" : "does NOT generalize"} ` +
+          `(mean gap ${fmtScore(h.mean_baseline_gap)}% → ${fmtScore(h.mean_winner_gap)}%).`;
+      return { agent: null, text };
     }
     case "run.stopped":
       return { agent: null, text: "Run stopped by user." };
