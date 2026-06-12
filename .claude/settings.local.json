@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__visualize__read_me",
+      "mcp__visualize__show_widget",
+      "PowerShell(git init)",
+      "PowerShell(git add -A)",
+      "PowerShell(git commit -m \"Initial commit: Long Run Agent Lab \\(pre UI redesign\\)\")"
+    ]
+  }
+}

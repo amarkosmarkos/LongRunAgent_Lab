@@ -1,0 +1,179 @@
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { api } from "./api.js";
+import { buildGraph, reduceEvents } from "./replay.js";
+import BranchGraph, { GraphLegend } from "./components/BranchGraph.jsx";
+import {
+  CostPanel, DetailPanel, EventFeed, KnowledgePanel, ResultsPanel, ScopePanel,
+} from "./components/Panels.jsx";
+
+const TERMINAL = ["completed", "failed", "stopped", "budget_exceeded"];
+
+export default function RunView({ runId, onBack }) {
+  const [events, setEvents] = useState([]);
+  const [status, setStatus] = useState("…");
+  const [cursor, setCursor] = useState(null); // null = live (all events)
+  const [playing, setPlaying] = useState(false);
+  const [speed, setSpeed] = useState(4);
+  const [tab, setTab] = useState("detail");
+  const [selectedSeq, setSelectedSeq] = useState(null);
+  const eventsRef = useRef(events);
+  eventsRef.current = events;
+
+  // ---- data: SSE with polling fallback
+  useEffect(() => {
+    let closed = false;
+    let cleanup = () => {};
+    const start = async () => {
+      const init = await api.getEvents(runId, 0);
+      if (closed) return;
+      setEvents(init.events);
+      setStatus(init.status);
+      if (TERMINAL.includes(init.status)) return;
+      cleanup = api.stream(
+        runId, init.events.length,
+        (ev) => setEvents((prev) =>
+          ev.seq >= prev.length ? [...prev, ev] : prev),
+        (endStatus) => {
+          if (endStatus) setStatus(endStatus);
+          else if (!closed) poll();
+        });
+    };
+    const poll = () => {
+      const t = setInterval(async () => {
+        try {
+          const r = await api.getEvents(runId, eventsRef.current.length);
+          if (r.events.length)
+            setEvents((prev) => [...prev, ...r.events]);
+          setStatus(r.status);
+          if (TERMINAL.includes(r.status)) clearInterval(t);
+        } catch { /* keep trying */ }
+      }, 1000);
+      cleanup = () => clearInterval(t);
+    };
+    start();
+    return () => { closed = true; cleanup(); };
+  }, [runId]);
+
+  // refresh status while running
+  useEffect(() => {
+    if (TERMINAL.includes(status)) return;
+    const t = setInterval(async () => {
+      try { setStatus((await api.getRun(runId)).status); } catch { /* ignore */ }
+    }, 1500);
+    return () => clearInterval(t);
+  }, [runId, status]);
+
+  // ---- replay playback
+  useEffect(() => {
+    if (!playing) return;
+    const t = setInterval(() => {
+      setCursor((c) => {
+        const next = (c == null ? 0 : c) + 1;
+        if (next >= eventsRef.current.length) {
+          setPlaying(false);
+          return null; // reached live
+        }
+        return next;
+      });
+    }, 1000 / speed);
+    return () => clearInterval(t);
+  }, [playing, speed]);
+
+  const state = useMemo(() => reduceEvents(events, cursor), [events, cursor]);
+  const graph = useMemo(() => buildGraph(events, cursor), [events, cursor]);
+  const visibleEvents = useMemo(
+    () => (cursor == null ? events : events.slice(0, cursor)),
+    [events, cursor]);
+
+  const imp = state.bestScore != null && state.baseline
+    ? Math.round(((state.baseline.score - state.bestScore) / state.baseline.score) * 1000) / 10
+    : null;
+  const budget = state.config?.budget_usd || 0;
+  const budgetPct = budget ? Math.min(100, (state.costs.total / budget) * 100) : 0;
+
+  const select = (seq) => { setSelectedSeq(seq); setTab("detail"); };
+  const live = cursor == null;
+
+  return (
+    <div className="runview">
+      <div className="runhead">
+        <button onClick={onBack}>← Runs</button>
+        <span className="chip running" style={{ fontFamily: "monospace" }}>{runId}</span>
+        <span className={`chip ${status}`}>{status}</span>
+        <div className="stat"><span className="k">baseline</span>
+          <span className="v">{state.baseline?.score ?? "—"}</span></div>
+        <div className="stat"><span className="k">best</span>
+          <span className="v good">{state.bestScore ?? "—"}</span></div>
+        <div className="stat"><span className="k">improvement</span>
+          <span className="v gold">{imp != null ? `${imp}%` : "—"}</span></div>
+        <div className="stat"><span className="k">cost</span>
+          <span className="v">${state.costs.total.toFixed(4)}</span></div>
+        <div className="stat"><span className="k">budget {budget ? `$${budget}` : ""}</span>
+          <span className="budgetbar"><div className={budgetPct > 80 ? "hot" : ""}
+            style={{ width: `${budgetPct}%` }} /></span></div>
+        {!TERMINAL.includes(status) && (
+          <button className="danger" style={{ marginLeft: "auto" }}
+            onClick={() => api.stopRun(runId)}>■ Stop run</button>
+        )}
+      </div>
+
+      <div className="replaybar">
+        <button onClick={() => { setCursor(0); setPlaying(false); }}>⏮</button>
+        <button className="primary" onClick={() => {
+          if (playing) { setPlaying(false); }
+          else { if (cursor == null) setCursor(0); setPlaying(true); }
+        }}>{playing ? "⏸ Pause" : "▶ Replay"}</button>
+        <select value={speed} onChange={(e) => setSpeed(Number(e.target.value))}>
+          <option value={1}>1×</option><option value={2}>2×</option>
+          <option value={4}>4×</option><option value={10}>10×</option>
+        </select>
+        <input type="range" min={0} max={events.length}
+          value={cursor == null ? events.length : cursor}
+          onChange={(e) => {
+            const v = Number(e.target.value);
+            setPlaying(false);
+            setCursor(v >= events.length ? null : v);
+          }} />
+        <span className="cursorinfo">
+          {live ? `live · ${events.length} events` : `event ${cursor}/${events.length}`}
+        </span>
+        {!live && <button onClick={() => { setCursor(null); setPlaying(false); }}>Go live</button>}
+      </div>
+
+      <div className="runbody">
+        <div style={{ flex: 1.2, display: "flex", flexDirection: "column", minWidth: 0 }}>
+          <GraphLegend />
+          <div className="graphwrap">
+            <BranchGraph graph={graph} branches={state.branches}
+              selectedSeq={selectedSeq} onSelect={select} />
+          </div>
+        </div>
+        <div className="sidepanel">
+          <div className="tabs">
+            {[["detail", "Detail"], ["scope", "Scope"], ["knowledge", "Knowledge"],
+              ["costs", "Costs"], ["results", "Results"], ["events", "Events"]]
+              .map(([k, label]) => (
+                <button key={k} className={tab === k ? "active" : ""}
+                  onClick={() => setTab(k)}>
+                  {label}
+                  {k === "knowledge" && state.insights.length > 0 &&
+                    ` (${state.insights.length})`}
+                </button>
+              ))}
+          </div>
+          <div className="tabbody">
+            {tab === "detail" && (
+              <DetailPanel state={state} events={visibleEvents} selectedSeq={selectedSeq} />)}
+            {tab === "scope" && <ScopePanel state={state} />}
+            {tab === "knowledge" && <KnowledgePanel state={state} />}
+            {tab === "costs" && <CostPanel state={state} />}
+            {tab === "results" && <ResultsPanel state={state} />}
+            {tab === "events" && (
+              <EventFeed events={visibleEvents} selectedSeq={selectedSeq}
+                onSelect={select} state={state} />)}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
