@@ -1,7 +1,10 @@
-// Renders TSP cities + a tour (baseline gray, best accent) on a canvas.
+// Renders TSP cities + a tour (baseline gray, best green) on a canvas.
 import React, { useEffect, useRef, useState } from "react";
+import { fmtScore } from "../format.js";
 
-export default function TourCanvas({ instance, baseline, bestSolution, bestScore }) {
+export default function TourCanvas({
+  instance, baseline, bestSolution, bestScore, width = 460, height = 400,
+}) {
   const ref = useRef(null);
   const [show, setShow] = useState("both"); // baseline | best | both
 
@@ -33,10 +36,10 @@ export default function TourCanvas({ instance, baseline, bestSolution, bestScore
       ctx.stroke();
     };
 
-    if (show !== "best") drawTour(baseline?.solution, "#3a4456", 1.2);
-    if (show !== "baseline") drawTour(bestSolution, "#58a6ff", 1.8);
+    if (show !== "best") drawTour(baseline?.solution, "#cfcbbf", 1.3);
+    if (show !== "baseline") drawTour(bestSolution, "#2b8a4f", 1.9);
 
-    ctx.fillStyle = "#dde3ec";
+    ctx.fillStyle = "#44423c";
     pts.forEach(([x, y]) => {
       ctx.beginPath();
       ctx.arc(sx(x), sy(y), 2.4, 0, Math.PI * 2);
@@ -54,12 +57,15 @@ export default function TourCanvas({ instance, baseline, bestSolution, bestScore
           <option value="baseline">baseline only</option>
           <option value="best">best only</option>
         </select>
-        <span className="sub" style={{ color: "#8b96a8", fontSize: 12 }}>
-          gray = baseline ({baseline?.score}) · blue = best{bestScore != null ? ` (${bestScore})` : ""}
+        <span className="sub">
+          gray = baseline ({fmtScore(baseline?.score)}) · green = best{bestScore != null ? ` (${fmtScore(bestScore)})` : ""}
         </span>
       </div>
-      <canvas ref={ref} width={460} height={400}
-        style={{ background: "#0a0e14", borderRadius: 8, border: "1px solid #2d3646", maxWidth: "100%" }} />
+      <canvas ref={ref} width={width} height={height}
+        style={{
+          background: "#fff", borderRadius: 8,
+          border: "1px solid var(--border)", maxWidth: "100%",
+        }} />
     </div>
   );
 }

@@ -1,7 +1,108 @@
 import React from "react";
 import TourCanvas from "./TourCanvas.jsx";
+import { agentMeta } from "../agents.js";
+import { narrate } from "../narrative.js";
+import { fmtScore } from "../format.js";
 
 const usd = (v) => `$${(v || 0).toFixed(4)}`;
+
+export function AgentBadge({ name, small }) {
+  const m = agentMeta(name);
+  const size = small ? 20 : 26;
+  return (
+    <span className="agentbadge">
+      <span className="avatar"
+        style={{ background: m.color, width: size, height: size, fontSize: small ? 9 : 10 }}>
+        {m.initials}
+      </span>
+      {!small && m.label}
+    </span>
+  );
+}
+
+// ------------------------------------------------------------- Branches
+export function BranchesPanel({ state, onSelect }) {
+  const { branchOrder, branches, baseline } = state;
+  if (!branchOrder.length)
+    return (
+      <div className="empty">
+        No branches yet — the Strategist proposes hypotheses first.
+      </div>
+    );
+  return (
+    <div>
+      <div className="sub" style={{ marginBottom: 10 }}>
+        Each hypothesis becomes a branch. Click a card to inspect it in the graph.
+      </div>
+      {branchOrder.map((id) => {
+        const b = branches[id];
+        const ended = state.results != null || state.endedStatus != null;
+        const status = b.status || (ended ? "ended" : "active");
+        const imp = b.best_score != null && baseline
+          ? Math.round(((baseline.score - b.best_score) / baseline.score) * 1000) / 10
+          : null;
+        return (
+          <div key={id} className={`branchcard ${status}`}
+            onClick={() => onSelect(b.createdSeq)}>
+            <div className="head">
+              <span className="name">{b.name}</span>
+              <span className={`badge ${status}`}>{status}</span>
+            </div>
+            {b.strategy && <div className="sub">{b.strategy}</div>}
+            <div className="hyp">{b.hypothesis}</div>
+            <div className="meta">
+              <span>best: <b>{fmtScore(b.best_score)}</b></span>
+              <span>vs baseline:{" "}
+                <b style={{ color: imp > 0 ? "var(--green)" : "inherit" }}>
+                  {imp != null ? `${imp}%` : "—"}
+                </b>
+              </span>
+              <span>{b.experiments || 0} experiment{(b.experiments || 0) === 1 ? "" : "s"}</span>
+            </div>
+            {b.parent_ids?.length > 0 && (
+              <div className="sub" style={{ marginTop: 4, color: "var(--purple)" }}>
+                merged from {b.parent_ids.map((pid) => branches[pid]?.name || pid).join(" + ")}
+                {b.mergeReason ? ` — ${b.mergeReason}` : ""}
+              </div>
+            )}
+            {b.collapseReason && (
+              <div className="sub" style={{ marginTop: 4, color: "var(--red)" }}>
+                collapsed: {b.collapseReason}
+              </div>
+            )}
+            {b.risk && <div className="sub" style={{ marginTop: 4 }}>risk: {b.risk}</div>}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------- Story
+export function StoryPanel({ events, state, selectedSeq, onSelect }) {
+  const rows = events
+    .map((ev) => ({ ev, line: narrate(ev, state) }))
+    .filter((r) => r.line);
+  if (!rows.length) return <div className="empty">Nothing has happened yet.</div>;
+  return (
+    <div>
+      {rows.map(({ ev, line }) => {
+        const m = agentMeta(line.agent);
+        return (
+          <div key={ev.seq}
+            className={`storyrow ${selectedSeq === ev.seq ? "sel" : ""}`}
+            onClick={() => onSelect(ev.seq)}>
+            <span className="avatar" style={{ background: m.color }}>{m.initials}</span>
+            <span className="txt">
+              <span className="who" style={{ color: m.color }}>{m.label}</span>
+              {line.text}
+            </span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
 
 // ---------------------------------------------------------------- Scope
 export function ScopePanel({ state }) {
@@ -22,7 +123,7 @@ export function ScopePanel({ state }) {
         <h4>Baseline</h4>
         <div className="kv">
           <span className="k">algorithm</span><span className="v">{baseline?.algorithm}</span>
-          <span className="k">score</span><span className="v">{baseline?.score}</span>
+          <span className="k">score</span><span className="v">{fmtScore(baseline?.score)}</span>
         </div>
       </div>
       <div className="panelcard">
@@ -39,7 +140,7 @@ export function ScopePanel({ state }) {
         <ul>{(scope.stop_conditions || []).map((c, i) => <li key={i}>{c}</li>)}</ul>
       </div>
       <div className="panelcard">
-        <h4>Planner reasoning</h4>
+        <h4><AgentBadge name="planner" small /> Planner reasoning</h4>
         <div className="sub">{scope.reasoning}</div>
       </div>
       {config && (
@@ -64,7 +165,7 @@ export function KnowledgePanel({ state }) {
     return <div className="empty">No shared insights discovered yet.</div>;
   return (
     <div>
-      <div className="sub" style={{ color: "#8b96a8", marginBottom: 10 }}>
+      <div className="sub" style={{ marginBottom: 10 }}>
         Insights extracted by the Critic, shared with every branch's Experimenter
         and used by the Supervisor for merge decisions.
       </div>
@@ -81,10 +182,13 @@ export function KnowledgePanel({ state }) {
 }
 
 // ----------------------------------------------------------------- Cost
-function Bars({ entries, max }) {
+function Bars({ entries, max, withAgents }) {
   return entries.map(([name, v]) => (
     <div className="costrow" key={name}>
-      <span className="name">{name}</span>
+      <span className="name">
+        {withAgents && <AgentBadge name={name} small />}
+        {withAgents ? agentMeta(name).label : name}
+      </span>
       <span className="bar"><div style={{ width: `${max ? (v / max) * 100 : 0}%` }} /></span>
       <span className="amt">{usd(v)}</span>
     </div>
@@ -116,7 +220,9 @@ export function CostPanel({ state }) {
       </div>
       <div className="panelcard">
         <h4>Cost by agent</h4>
-        {agents.length ? <Bars entries={agents} max={maxA} /> : <span className="sub">—</span>}
+        {agents.length
+          ? <Bars entries={agents} max={maxA} withAgents />
+          : <span className="sub">—</span>}
       </div>
       <div className="panelcard">
         <h4>Cost by branch</h4>
@@ -131,7 +237,7 @@ export function CostPanel({ state }) {
 
 // -------------------------------------------------------------- Results
 export function ResultsPanel({ state }) {
-  const { results, baseline, instance, bestSolution, bestScore, branches } = state;
+  const { results, baseline, instance, bestSolution, bestScore } = state;
   const imp = results?.improvement_pct ??
     (bestScore != null && baseline
       ? Math.round(((baseline.score - bestScore) / baseline.score) * 1000) / 10
@@ -141,11 +247,11 @@ export function ResultsPanel({ state }) {
       <div className="resultbig">
         <div className="stat">
           <span className="k">baseline</span>
-          <span className="v">{baseline?.score ?? "—"}</span>
+          <span className="v">{fmtScore(baseline?.score)}</span>
         </div>
         <div className="stat">
           <span className="k">best found</span>
-          <span className="v good">{bestScore ?? "—"}</span>
+          <span className="v good">{fmtScore(bestScore)}</span>
         </div>
         <div className="stat">
           <span className="k">improvement</span>
@@ -161,11 +267,11 @@ export function ResultsPanel({ state }) {
             <span className="k">target</span>
             <span className="v">{results.target_improvement_pct}%</span>
             <span className="k">target met</span>
-            <span className="v" style={{ color: results.target_met ? "#3fb950" : "#f85149" }}>
+            <span className="v" style={{ color: results.target_met ? "var(--green)" : "var(--red)" }}>
               {results.target_met ? "yes" : "no"}
             </span>
             <span className="k">re-verified</span>
-            <span className="v" style={{ color: results.verified ? "#3fb950" : "#f85149" }}>
+            <span className="v" style={{ color: results.verified ? "var(--green)" : "var(--red)" }}>
               {results.verified ? `yes (score ${results.verified_score})` : "no"}
             </span>
             <span className="k">ended because</span>
@@ -186,7 +292,7 @@ export function ResultsPanel({ state }) {
 // ---------------------------------------------------------- Node detail
 export function DetailPanel({ state, events, selectedSeq }) {
   if (selectedSeq == null)
-    return <div className="empty">Select a node in the graph or an event in the feed.</div>;
+    return <div className="empty">Select a node in the graph or an entry in the story.</div>;
   const ev = events.find((e) => e.seq === selectedSeq);
   if (!ev) return <div className="empty">Event not yet loaded.</div>;
   const p = ev.payload || {};
@@ -197,7 +303,8 @@ export function DetailPanel({ state, events, selectedSeq }) {
       <h4>{ev.type}</h4>
       <div className="kv">
         <span className="k">seq</span><span className="v">#{ev.seq}</span>
-        {ev.agent && (<><span className="k">agent</span><span className="v">{ev.agent}</span></>)}
+        {ev.agent && (<><span className="k">agent</span>
+          <span className="v"><AgentBadge name={ev.agent} /></span></>)}
         {branch && (<><span className="k">branch</span><span className="v">{branch.name}</span></>)}
       </div>
     </div>
@@ -226,20 +333,20 @@ export function DetailPanel({ state, events, selectedSeq }) {
           <h4>Result (engine-verified)</h4>
           <div className="kv">
             <span className="k">valid</span><span className="v">{String(p.valid)}</span>
-            <span className="k">score</span><span className="v">{p.score ?? "—"}</span>
-            <span className="k">baseline</span><span className="v">{p.baseline_score}</span>
+            <span className="k">score</span><span className="v">{fmtScore(p.score)}</span>
+            <span className="k">baseline</span><span className="v">{fmtScore(p.baseline_score)}</span>
             <span className="k">vs baseline</span>
-            <span className="v" style={{ color: p.beats_baseline ? "#3fb950" : "#8b96a8" }}>
+            <span className="v" style={{ color: p.beats_baseline ? "var(--green)" : "var(--muted)" }}>
               {p.improvement_pct != null ? `${p.improvement_pct}%` : "—"}</span>
             <span className="k">improved branch</span><span className="v">{String(p.improved)}</span>
             <span className="k">exec time</span><span className="v">{p.exec_time}s</span>
             {p.error && (<><span className="k">error</span>
-              <span className="v" style={{ color: "#f85149" }}>{p.error}</span></>)}
+              <span className="v" style={{ color: "var(--red)" }}>{p.error}</span></>)}
           </div>
         </div>
         {critique && (
           <div className="panelcard">
-            <h4>Critic verdict</h4>
+            <h4><AgentBadge name="critic" small /> Critic verdict</h4>
             <div><span className={`verdict ${critique.payload.verdict}`}>
               {critique.payload.verdict}</span> — {critique.payload.analysis}</div>
             {critique.payload.suggestion && (
@@ -328,11 +435,10 @@ export function EventFeed({ events, selectedSeq, onSelect, state }) {
 }
 
 function typeColor(t) {
-  if (t.startsWith("experiment")) return "#dde3ec";
-  if (t === "insight.added") return "#bc8cff";
-  if (t === "branch.collapsed" || t === "run.failed") return "#f85149";
-  if (t === "branch.winner" || t === "run.completed") return "#e3b341";
-  if (t === "branch.merged" || t === "branch.created") return "#58a6ff";
-  if (t === "llm.called") return "#8b96a8";
-  return "#8b96a8";
+  if (t.startsWith("experiment")) return "var(--text)";
+  if (t === "insight.added") return "var(--purple)";
+  if (t === "branch.collapsed" || t === "run.failed") return "var(--red)";
+  if (t === "branch.winner" || t === "run.completed") return "var(--gold)";
+  if (t === "branch.merged" || t === "branch.created") return "var(--accent)";
+  return "var(--muted)";
 }

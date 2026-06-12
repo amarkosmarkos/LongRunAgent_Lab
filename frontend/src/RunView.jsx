@@ -1,12 +1,22 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "./api.js";
+import { fmtScore } from "./format.js";
 import { buildGraph, reduceEvents } from "./replay.js";
 import BranchGraph, { GraphLegend } from "./components/BranchGraph.jsx";
+import TourCanvas from "./components/TourCanvas.jsx";
 import {
-  CostPanel, DetailPanel, EventFeed, KnowledgePanel, ResultsPanel, ScopePanel,
+  BranchesPanel, CostPanel, DetailPanel, EventFeed, KnowledgePanel,
+  ResultsPanel, ScopePanel, StoryPanel,
 } from "./components/Panels.jsx";
 
 const TERMINAL = ["completed", "failed", "stopped", "budget_exceeded"];
+
+function phaseLabel(state, status) {
+  if (TERMINAL.includes(status)) return "4 · concluded";
+  if (!state.scope) return "1 · scoping";
+  if (!state.branchOrder.length) return "2 · branching";
+  return "3 · experimenting";
+}
 
 export default function RunView({ runId, onBack }) {
   const [events, setEvents] = useState([]);
@@ -14,8 +24,9 @@ export default function RunView({ runId, onBack }) {
   const [cursor, setCursor] = useState(null); // null = live (all events)
   const [playing, setPlaying] = useState(false);
   const [speed, setSpeed] = useState(4);
-  const [tab, setTab] = useState("detail");
+  const [tab, setTab] = useState("story");
   const [selectedSeq, setSelectedSeq] = useState(null);
+  const [mapOpen, setMapOpen] = useState(true);
   const eventsRef = useRef(events);
   eventsRef.current = events;
 
@@ -98,12 +109,13 @@ export default function RunView({ runId, onBack }) {
     <div className="runview">
       <div className="runhead">
         <button onClick={onBack}>← Runs</button>
-        <span className="chip running" style={{ fontFamily: "monospace" }}>{runId}</span>
+        <span className="chip" style={{ fontFamily: "monospace" }}>{runId}</span>
         <span className={`chip ${status}`}>{status}</span>
+        <span className="chip phase">{phaseLabel(state, status)}</span>
         <div className="stat"><span className="k">baseline</span>
-          <span className="v">{state.baseline?.score ?? "—"}</span></div>
+          <span className="v">{fmtScore(state.baseline?.score)}</span></div>
         <div className="stat"><span className="k">best</span>
-          <span className="v good">{state.bestScore ?? "—"}</span></div>
+          <span className="v good">{fmtScore(state.bestScore)}</span></div>
         <div className="stat"><span className="k">improvement</span>
           <span className="v gold">{imp != null ? `${imp}%` : "—"}</span></div>
         <div className="stat"><span className="k">cost</span>
@@ -141,27 +153,50 @@ export default function RunView({ runId, onBack }) {
       </div>
 
       <div className="runbody">
-        <div style={{ flex: 1.2, display: "flex", flexDirection: "column", minWidth: 0 }}>
+        <div className="graphcol">
           <GraphLegend />
           <div className="graphwrap">
             <BranchGraph graph={graph} branches={state.branches}
               selectedSeq={selectedSeq} onSelect={select} />
           </div>
+          {state.instance && (
+            <div className="mappanel">
+              <div className="maphead">
+                <span>Tour map</span>
+                <span className="sub">updates live as experiments improve the tour</span>
+                <button className="link" onClick={() => setMapOpen((o) => !o)}>
+                  {mapOpen ? "hide ▾" : "show ▸"}
+                </button>
+              </div>
+              {mapOpen && (
+                <TourCanvas instance={state.instance} baseline={state.baseline}
+                  bestSolution={state.results?.best_solution || state.bestSolution}
+                  bestScore={state.bestScore} width={520} height={230} />
+              )}
+            </div>
+          )}
         </div>
         <div className="sidepanel">
           <div className="tabs">
-            {[["detail", "Detail"], ["scope", "Scope"], ["knowledge", "Knowledge"],
-              ["costs", "Costs"], ["results", "Results"], ["events", "Events"]]
+            {[["story", "Story"], ["branches", "Branches"], ["detail", "Detail"],
+              ["scope", "Scope"], ["knowledge", "Knowledge"], ["costs", "Costs"],
+              ["results", "Results"], ["events", "Events"]]
               .map(([k, label]) => (
                 <button key={k} className={tab === k ? "active" : ""}
                   onClick={() => setTab(k)}>
                   {label}
                   {k === "knowledge" && state.insights.length > 0 &&
                     ` (${state.insights.length})`}
+                  {k === "branches" && state.branchOrder.length > 0 &&
+                    ` (${state.branchOrder.length})`}
                 </button>
               ))}
           </div>
           <div className="tabbody">
+            {tab === "story" && (
+              <StoryPanel events={visibleEvents} state={state}
+                selectedSeq={selectedSeq} onSelect={select} />)}
+            {tab === "branches" && <BranchesPanel state={state} onSelect={select} />}
             {tab === "detail" && (
               <DetailPanel state={state} events={visibleEvents} selectedSeq={selectedSeq} />)}
             {tab === "scope" && <ScopePanel state={state} />}

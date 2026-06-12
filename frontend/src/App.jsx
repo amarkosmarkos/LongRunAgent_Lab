@@ -64,7 +64,7 @@ export default function App() {
         <div className="runlist">
           <div className="newrun">
             <h2 style={{ margin: "0 0 4px" }}>New experiment run</h2>
-            <div className="sub" style={{ color: "#8b96a8" }}>
+            <div className="sub">
               Travelling Salesman Problem — agents must beat the nearest-neighbor baseline.
             </div>
             <div className="fields">

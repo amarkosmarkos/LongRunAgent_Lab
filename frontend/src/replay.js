@@ -173,7 +173,7 @@ export function buildGraph(events, cursor) {
         const kind = !p.valid ? "failed" : p.improved ? "improved" : "neutral";
         const id = push({
           id: `n${ev.seq}`, kind, lane: lanes[ev.branch_id] ?? 0, row: row++,
-          label: p.valid ? String(p.score) : "error",
+          label: p.valid ? Number(p.score).toFixed(1) : "error",
           branch_id: ev.branch_id, seq: ev.seq,
           score: p.score, round: p.round, beats: p.beats_baseline,
         });

@@ -103,12 +103,14 @@ backend/app/
 frontend/src/
   api.js           REST + SSE client
   replay.js        pure reducer: events[0..seq] -> view state
+  agents.js        visual identity (color/initials) per agent role
+  narrative.js     events -> human-readable story lines
   App.jsx          run list + new-run form
-  RunView.jsx      header (score/budget), replay controls, layout
+  RunView.jsx      header (phase/score/budget), replay controls, layout, live tour map
   components/
-    BranchGraph.jsx  git-style lane graph (deterministic SVG layout, no force physics)
-    TourCanvas.jsx   baseline vs best tour rendering
-    Panels.jsx       Scope / Knowledge / Costs / Results / Node detail
+    BranchGraph.jsx  git-style lane graph (deterministic SVG layout, hover tooltips)
+    TourCanvas.jsx   baseline vs best tour rendering (pinned under the graph, live)
+    Panels.jsx       Story / Branches / Detail / Scope / Knowledge / Costs / Results / Events
 ```
 
 The branch graph uses fixed lanes per branch (x) and event order (y) — a git-log style
