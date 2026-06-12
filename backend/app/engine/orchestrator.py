@@ -54,6 +54,12 @@ class Orchestrator:
             "model": res.model, "input_tokens": res.input_tokens,
             "output_tokens": res.output_tokens, "cost_usd": round(res.cost_usd, 6),
             "total_cost_usd": round(self.total_cost, 6),
+            # full context for decision-making transparency: exactly what the
+            # agent saw (accumulated insights, critiques, previous code) and
+            # exactly what it answered before any parsing
+            "system_prompt": system,
+            "user_prompt": prompt,
+            "raw_response": res.text,
         })
         return res
 

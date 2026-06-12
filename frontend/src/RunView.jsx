@@ -198,7 +198,8 @@ export default function RunView({ runId, onBack }) {
                 selectedSeq={selectedSeq} onSelect={select} />)}
             {tab === "branches" && <BranchesPanel state={state} onSelect={select} />}
             {tab === "detail" && (
-              <DetailPanel state={state} events={visibleEvents} selectedSeq={selectedSeq} />)}
+              <DetailPanel state={state} events={visibleEvents}
+                selectedSeq={selectedSeq} onSelect={select} />)}
             {tab === "scope" && <ScopePanel state={state} />}
             {tab === "knowledge" && <KnowledgePanel state={state} />}
             {tab === "costs" && <CostPanel state={state} />}

@@ -346,13 +346,37 @@ export function ResultsPanel({ state }) {
 }
 
 // ---------------------------------------------------------- Node detail
-export function DetailPanel({ state, events, selectedSeq }) {
+function findLlmCall(events, ev) {
+  // The llm.called event emitted just before this agent output: same agent
+  // (and branch, when set), highest seq below the selected event.
+  for (let i = events.length - 1; i >= 0; i--) {
+    const e = events[i];
+    if (e.seq >= ev.seq || e.type !== "llm.called") continue;
+    if (ev.agent && e.agent !== ev.agent) continue;
+    if (ev.branch_id && e.branch_id !== ev.branch_id) continue;
+    return e;
+  }
+  return null;
+}
+
+function PromptBlock({ title, text, open }) {
+  if (!text) return null;
+  return (
+    <details className="promptblock" open={open}>
+      <summary>{title} <span className="sub">({text.length.toLocaleString()} chars)</span></summary>
+      <pre className="code prompt">{text}</pre>
+    </details>
+  );
+}
+
+export function DetailPanel({ state, events, selectedSeq, onSelect }) {
   if (selectedSeq == null)
     return <div className="empty">Select a node in the graph or an entry in the story.</div>;
   const ev = events.find((e) => e.seq === selectedSeq);
   if (!ev) return <div className="empty">Event not yet loaded.</div>;
   const p = ev.payload || {};
   const branch = ev.branch_id ? state.branches[ev.branch_id] : null;
+  const llmCall = ev.type === "llm.called" ? null : findLlmCall(events, ev);
 
   const common = (
     <div className="panelcard">
@@ -363,8 +387,46 @@ export function DetailPanel({ state, events, selectedSeq }) {
           <span className="v"><AgentBadge name={ev.agent} /></span></>)}
         {branch && (<><span className="k">branch</span><span className="v">{branch.name}</span></>)}
       </div>
+      {llmCall?.payload?.user_prompt && onSelect && (
+        <button className="link" style={{ marginTop: 6, paddingLeft: 0 }}
+          onClick={() => onSelect(llmCall.seq)}>
+          → view the LLM call behind this (full prompt + raw response)
+        </button>
+      )}
     </div>
   );
+
+  if (ev.type === "llm.called") {
+    return (
+      <div>
+        {common}
+        <div className="panelcard">
+          <h4>LLM call</h4>
+          <div className="kv">
+            <span className="k">model</span><span className="v">{p.model}</span>
+            <span className="k">input tokens</span><span className="v">{p.input_tokens}</span>
+            <span className="k">output tokens</span><span className="v">{p.output_tokens}</span>
+            <span className="k">cost</span><span className="v">{usd(p.cost_usd)}</span>
+          </div>
+        </div>
+        {p.user_prompt ? (
+          <div className="panelcard">
+            <h4>What the agent saw and answered</h4>
+            <PromptBlock title="System prompt (role definition)" text={p.system_prompt} />
+            <PromptBlock title="User prompt (full accumulated context)" text={p.user_prompt} open />
+            <PromptBlock title="Raw response (before parsing)" text={p.raw_response} />
+          </div>
+        ) : (
+          <div className="panelcard">
+            <div className="sub">
+              This run predates prompt capture — newer runs record the full
+              prompt and raw response of every call.
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
 
   if (ev.type === "experiment.completed") {
     const started = [...events].reverse().find(

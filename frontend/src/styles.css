@@ -243,6 +243,15 @@ pre.code {
 .badge.merged { background: var(--purple-soft); color: var(--purple); }
 .badge.winner { background: var(--amber-soft); color: var(--gold); }
 
+/* ---- prompt inspector ---- */
+.promptblock { margin: 8px 0; }
+.promptblock summary {
+  cursor: pointer; font-size: 12.5px; font-weight: 600; color: var(--text);
+  padding: 4px 0;
+}
+.promptblock summary:hover { color: var(--accent); }
+pre.code.prompt { max-height: 420px; white-space: pre-wrap; word-break: break-word; }
+
 /* ---- result tables ---- */
 .htable { width: 100%; border-collapse: collapse; font-size: 12px; }
 .htable th {
