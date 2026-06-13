@@ -410,6 +410,7 @@ class Orchestrator:
                 "winner_branch_id": winner.id,
                 "winner_branch_name": winner.name,
                 "best_solution": winner.best_solution,
+                "winner_code": winner.best_code,
                 "verified": err is None and verified_score == winner.best_score,
                 "verified_score": verified_score,
                 "target_met": (results["improvement_pct"] or 0) >=

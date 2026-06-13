@@ -2,3 +2,4 @@ fastapi>=0.110
 uvicorn[standard]>=0.29
 anthropic>=0.40
 python-dotenv>=1.0
+elkai>=2.0  # LKH (Lin-Kernighan-Helsgaun) — state-of-the-art TSP reference

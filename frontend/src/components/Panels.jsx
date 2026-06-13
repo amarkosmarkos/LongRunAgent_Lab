@@ -339,6 +339,16 @@ export function ResultsPanel({ state }) {
         </div>
       )}
       {results?.holdout && <HoldoutReport holdout={results.holdout} />}
+      {results?.winner_code && (
+        <div className="panelcard">
+          <h4>Winning solver code (the optimal solver found)</h4>
+          <div className="sub" style={{ marginBottom: 6 }}>
+            This exact pure-Python solver produced the best result above and was
+            re-verified independently by the engine.
+          </div>
+          <pre className="code">{results.winner_code}</pre>
+        </div>
+      )}
       <TourCanvas instance={instance} baseline={baseline}
         bestSolution={results?.best_solution || bestSolution} bestScore={bestScore} />
     </div>
