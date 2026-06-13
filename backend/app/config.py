@@ -28,15 +28,12 @@ AGENT_MODELS = {
     "supervisor": os.getenv("MODEL_SUPERVISOR", "claude-sonnet-4-6"),
 }
 
-# Output token caps per role. The experimenter writes full solvers, which can be
-# long — too low a cap truncates the code mid-fence and looks like "no code".
-AGENT_MAX_TOKENS = {
-    "planner": 1500,
-    "strategist": 2000,
-    "experimenter": 8000,
-    "critic": 1200,
-    "supervisor": 1500,
-}
+# Output token ceiling for every agent. The API requires max_tokens, so it can't
+# be removed — set it as high as a non-streaming request safely allows (above
+# ~16K the SDK refuses non-streaming calls / risks HTTP timeouts). This is well
+# above anything an agent actually emits, so it never truncates real work. To go
+# higher (sonnet 64K / opus 128K) we'd have to switch the client to streaming.
+MAX_OUTPUT_TOKENS = 16000
 
 DEFAULT_RUN_CONFIG = {
     "problem": "tsp",

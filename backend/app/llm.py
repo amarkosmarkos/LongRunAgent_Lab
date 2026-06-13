@@ -1,7 +1,7 @@
 """LLM client: real Anthropic API or deterministic mock. Tracks cost per call."""
 from __future__ import annotations
 
-from .config import (AGENT_MAX_TOKENS, AGENT_MODELS, ANTHROPIC_API_KEY, LLM_MOCK,
+from .config import (AGENT_MODELS, ANTHROPIC_API_KEY, LLM_MOCK, MAX_OUTPUT_TOKENS,
                      MODEL_PRICING)
 
 
@@ -43,7 +43,7 @@ class LLMClient:
         model = AGENT_MODELS.get(role, AGENT_MODELS["experimenter"])
         msg = self._client.messages.create(
             model=model,
-            max_tokens=AGENT_MAX_TOKENS.get(role, 4000),
+            max_tokens=MAX_OUTPUT_TOKENS,
             system=system,
             messages=[{"role": "user", "content": prompt}],
         )
