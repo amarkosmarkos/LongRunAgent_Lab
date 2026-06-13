@@ -42,9 +42,25 @@ class Orchestrator:
         if self.total_cost >= self.cfg["budget_usd"]:
             raise StopRun("budget exceeded")
 
+    # short human label per role, shown while the (slow) call is in flight
+    _THINKING = {
+        "planner": "reading the problem and setting the objective",
+        "strategist": "designing hypotheses to explore",
+        "experimenter": "writing solver code",
+        "critic": "analysing the result",
+        "supervisor": "reviewing branches and deciding what to keep",
+    }
+
     def _call(self, role: str, system: str, prompt: str,
-              context: dict | None = None, branch_id: str | None = None):
+              context: dict | None = None, branch_id: str | None = None,
+              action: str | None = None):
         self._check_interrupts()
+        # announce intent BEFORE the API call so the UI can show the agent
+        # "thinking" live, instead of nodes only appearing once work is done
+        self.run.emit("agent.thinking", agent=role, branch_id=branch_id, payload={
+            "action": action or self._THINKING.get(role, "thinking"),
+            "round": self.round or None,
+        })
         res = self.llm.call(role, system, prompt, context)
         self.total_cost += res.cost_usd
         self.cost_by_agent[role] = self.cost_by_agent.get(role, 0.0) + res.cost_usd
@@ -172,7 +188,8 @@ class Orchestrator:
                 {**b.public(), "best_code": b.best_code}, rnd, last, critique,
                 [i.public() for i in self.insights],
                 self.cfg["experiment_timeout_s"]),
-            context={"strategy": b.strategy, "attempt": attempt}, branch_id=b.id)
+            context={"strategy": b.strategy, "attempt": attempt}, branch_id=b.id,
+            action=f"writing solver code (round {rnd}, attempt {attempt})")
         try:
             meta = agents.parse_json(res.text)
         except Exception:

@@ -4,6 +4,7 @@ import { fmtScore } from "./format.js";
 import { buildGraph, reduceEvents } from "./replay.js";
 import BranchGraph, { GraphLegend } from "./components/BranchGraph.jsx";
 import TourCanvas from "./components/TourCanvas.jsx";
+import { agentMeta } from "./agents.js";
 import {
   BranchesPanel, CostPanel, DetailPanel, EventFeed, KnowledgePanel,
   ResultsPanel, ScopePanel, StoryPanel,
@@ -104,6 +105,8 @@ export default function RunView({ runId, onBack }) {
 
   const select = (seq) => { setSelectedSeq(seq); setTab("detail"); };
   const live = cursor == null;
+  const running = !TERMINAL.includes(status);
+  const thinking = Object.values(state.activity || {});
 
   return (
     <div className="runview">
@@ -112,6 +115,16 @@ export default function RunView({ runId, onBack }) {
         <span className="chip" style={{ fontFamily: "monospace" }}>{runId}</span>
         <span className={`chip ${status}`}>{status}</span>
         <span className="chip phase">{phaseLabel(state, status)}</span>
+        {state.mockMode != null && (
+          <span className={`chip llmtag ${state.mockMode ? "mock" : "live"}`}
+            title={state.mockMode
+              ? "Scripted mock LLM — solver code still really runs and is verified"
+              : `Real Claude API calls: ${state.models.join(", ")}`}>
+            {state.mockMode
+              ? "◌ mock LLM (demo)"
+              : `● real agents · ${state.models.map((m) => m.replace("claude-", "").replace(/-\d+$/, "")).join(" + ")}`}
+          </span>
+        )}
         <div className="stat"><span className="k">baseline</span>
           <span className="v">{fmtScore(state.baseline?.score)}</span></div>
         <div className="stat"><span className="k">best</span>
@@ -152,11 +165,36 @@ export default function RunView({ runId, onBack }) {
         {!live && <button onClick={() => { setCursor(null); setPlaying(false); }}>Go live</button>}
       </div>
 
+      {live && running && (
+        <div className="activitybar">
+          {thinking.length ? thinking.map((g) => {
+            const m = agentMeta(g.agent);
+            return (
+              <span className="thinking" key={g.agent + (g.branch_id || "")}>
+                <span className="avatar pulse" style={{ background: m.color }}>{m.initials}</span>
+                <span className="who" style={{ color: m.color }}>{m.label}</span>
+                <span className="act">{g.action}
+                  {g.branch_id && state.branches[g.branch_id]
+                    ? ` · ${state.branches[g.branch_id].name}` : ""}
+                  <span className="dots"><i/><i/><i/></span>
+                </span>
+              </span>
+            );
+          }) : (
+            <span className="thinking idle">
+              <span className="avatar pulse" style={{ background: "var(--faint)" }}>··</span>
+              <span className="act">agents are between steps — preparing the next move…</span>
+            </span>
+          )}
+        </div>
+      )}
+
       <div className="runbody">
         <div className="graphcol">
           <GraphLegend />
           <div className="graphwrap">
             <BranchGraph graph={graph} branches={state.branches}
+              activity={live ? state.activity : {}}
               selectedSeq={selectedSeq} onSelect={select} />
           </div>
           {state.instance && (

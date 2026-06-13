@@ -3,6 +3,7 @@
 // Hovering a node shows a tooltip; clicking opens it in the Detail tab.
 import React, { useState } from "react";
 import { fmtScore } from "../format.js";
+import { agentMeta } from "../agents.js";
 
 const COLORS = {
   scope: "#2667d6",
@@ -78,16 +79,19 @@ function tooltipFor(n, branches) {
   }
 }
 
-export default function BranchGraph({ graph, branches, selectedSeq, onSelect }) {
+export default function BranchGraph({ graph, branches, activity, selectedSeq, onSelect }) {
   const { nodes, edges, lanes, branchMeta } = graph;
   const [tip, setTip] = useState(null); // {x, y, title, lines}
-  if (!nodes.length)
+  // agents currently thinking -> ghost nodes at the graph's growing edge, so
+  // work is visible while it happens instead of nodes popping in when finished
+  const ghosts = Object.values(activity || {});
+  if (!nodes.length && !ghosts.length)
     return <div className="empty">Waiting for the run to produce events…</div>;
 
   const byId = Object.fromEntries(nodes.map((n) => [n.id, n]));
   const numLanes = Math.max(1, Object.keys(lanes).length);
   const width = PAD_X + numLanes * LANE_W + 60;
-  const height = PAD_Y + graph.rows * ROW_H + 40;
+  const height = PAD_Y + (graph.rows + (ghosts.length ? 1 : 0)) * ROW_H + 40;
 
   const hover = (n) => {
     const [x, y] = nodeXY(n);
@@ -196,6 +200,27 @@ export default function BranchGraph({ graph, branches, selectedSeq, onSelect }) 
               {n.kind === "collapsed" && (
                 <text x={x + 14} y={y + 4} fontSize="10" fill={color}>collapsed</text>
               )}
+            </g>
+          );
+        })}
+
+        {/* live "thinking" ghosts: pulsing nodes for agents working right now */}
+        {ghosts.map((g, i) => {
+          const m = agentMeta(g.agent);
+          const lane = g.branch_id != null ? (lanes[g.branch_id] ?? 0) : -1;
+          const [x, y] = nodeXY({ lane, row: graph.rows + i });
+          return (
+            <g key={`ghost-${g.agent}-${g.branch_id ?? "@"}`}
+              onClick={() => g.seq != null && onSelect(g.seq)}
+              style={{ cursor: "pointer" }}>
+              <circle className="ghostpulse" cx={x} cy={y} r={9}
+                fill={m.color} opacity="0.85" />
+              <circle className="ghostring" cx={x} cy={y} r={9}
+                fill="none" stroke={m.color} strokeWidth="1.5" />
+              <text x={x + 15} y={y - 2} fontSize="10.5" fontWeight="600"
+                fill={m.color}>{m.label}</text>
+              <text x={x + 15} y={y + 10} fontSize="9.5" fill={TEXT_MUTED}>
+                {(g.action || "thinking").slice(0, 34)}…</text>
             </g>
           );
         })}

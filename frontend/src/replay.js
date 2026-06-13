@@ -20,8 +20,15 @@ export function emptyState() {
     bestBranchId: null,
     bestSolution: null,
     endedStatus: null,
+    activity: {}, // key -> {agent, action, round, branch_id} of agents thinking now
+    models: [], // distinct LLM models seen
+    mockMode: null, // null=unknown, true=mock LLM, false=real Claude
   };
 }
+
+// one agent works per branch at a time, so the branch id is a stable key;
+// run-level agents (planner/strategist/supervisor) key on their own name
+const actKey = (agent, branchId) => branchId || "@" + agent;
 
 export function reduceEvents(events, cursor) {
   const s = emptyState();
@@ -39,12 +46,26 @@ function apply(s, ev) {
       s.instance = p.instance;
       s.baseline = p.baseline;
       break;
+    case "agent.thinking":
+      s.activity[actKey(ev.agent, ev.branch_id)] = {
+        agent: ev.agent, branch_id: ev.branch_id,
+        action: p.action, round: p.round, seq: ev.seq,
+      };
+      break;
     case "scope.defined":
       s.scope = p.scope;
+      delete s.activity["@planner"];
       break;
     case "hypotheses.proposed":
       s.hypotheses = p.hypotheses || [];
+      delete s.activity["@strategist"];
       break;
+    case "experiment.started": {
+      // experimenter has moved from authoring code to running it in the sandbox
+      const a = s.activity[ev.branch_id];
+      if (a) a.action = "running the solver in the sandbox";
+      break;
+    }
     case "branch.created": {
       const b = p.branch;
       s.branches[b.id] = {
@@ -58,6 +79,7 @@ function apply(s, ev) {
       break;
     }
     case "experiment.completed": {
+      delete s.activity[ev.branch_id];
       const b = s.branches[ev.branch_id];
       if (b) {
         b.experiments = (b.experiments || 0) + 1;
@@ -73,12 +95,14 @@ function apply(s, ev) {
       break;
     }
     case "critique.added":
+      delete s.activity[ev.branch_id];
       s.critiques.push({ ...p, branch_id: ev.branch_id, seq: ev.seq });
       break;
     case "insight.added":
       s.insights.push(p.insight);
       break;
     case "supervisor.decision":
+      delete s.activity["@supervisor"];
       s.decisions.push({ ...p, seq: ev.seq });
       break;
     case "branch.collapsed": {
@@ -109,14 +133,21 @@ function apply(s, ev) {
       if (ev.branch_id)
         s.costs.byBranch[ev.branch_id] =
           (s.costs.byBranch[ev.branch_id] || 0) + (p.cost_usd || 0);
+      if (p.model) {
+        if (!s.models.includes(p.model)) s.models.push(p.model);
+        if (p.model === "mock") { if (s.mockMode == null) s.mockMode = true; }
+        else s.mockMode = false; // any real model means this run hit the API
+      }
       break;
     case "run.completed":
       s.results = p.results;
       s.endedStatus = "completed";
+      s.activity = {}; // nothing is thinking once the run has ended
       break;
     case "run.failed":
       s.endedStatus = "failed";
       s.failure = p.error;
+      s.activity = {};
       break;
     default:
       break;

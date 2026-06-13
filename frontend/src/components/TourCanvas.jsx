@@ -4,7 +4,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { fmtScore } from "../format.js";
 
-function Canvas({ cities, baselineTour, bestTour, width, height }) {
+function Canvas({ cities, baselineTour, bestTour, baselineLabel, width, height }) {
   const ref = useRef(null);
   const [show, setShow] = useState("both"); // baseline | best | both
 
@@ -46,15 +46,19 @@ function Canvas({ cities, baselineTour, bestTour, width, height }) {
     });
   }, [cities, baselineTour, bestTour, show]);
 
+  const blbl = baselineLabel || "baseline";
   return (
     <div>
-      <div style={{ display: "flex", gap: 8, marginBottom: 8, alignItems: "center" }}>
+      <div style={{ display: "flex", gap: 8, marginBottom: 8, alignItems: "center", flexWrap: "wrap" }}>
         <select value={show} onChange={(e) => setShow(e.target.value)}>
-          <option value="both">baseline + best</option>
-          <option value="baseline">baseline only</option>
-          <option value="best">best only</option>
+          <option value="both">both tours</option>
+          <option value="baseline">starting tour only</option>
+          <option value="best">agents' best only</option>
         </select>
-        <span className="sub">gray = baseline tour · green = best tour</span>
+        <span className="sub">
+          <b style={{ color: "#9b968a" }}>gray</b> = starting tour ({blbl}) ·{" "}
+          <b style={{ color: "#2b8a4f" }}>green</b> = best the agents found
+        </span>
       </div>
       <canvas ref={ref} width={width} height={height}
         style={{
@@ -72,14 +76,25 @@ export default function TourCanvas({
   if (!instance) return <div className="empty">No instance yet.</div>;
 
   if (!instance.benchmark) {
+    const imp = bestScore != null && baseline?.score
+      ? Math.round(((baseline.score - bestScore) / baseline.score) * 1000) / 10
+      : null;
     return (
       <div>
         <div className="sub" style={{ marginBottom: 4 }}>
-          baseline score {fmtScore(baseline?.score)}
-          {bestScore != null ? ` · best ${fmtScore(bestScore)}` : ""}
+          starting tour {fmtScore(baseline?.score)}
+          {bestScore != null ? ` → agents' best ${fmtScore(bestScore)}` : ""}
+          {imp != null ? ` (${imp}% shorter)` : ""}
         </div>
         <Canvas cities={instance.cities} baselineTour={baseline?.solution}
-          bestTour={bestSolution} width={width} height={height} />
+          bestTour={bestSolution} baselineLabel={baseline?.algorithm}
+          width={width} height={height} />
+        <div className="sub" style={{ marginTop: 6, lineHeight: 1.5 }}>
+          Only two tours exist here: the <b>starting tour</b> ({baseline?.algorithm}) and
+          the <b>best tour the agents found</b>. This is a random instance, so there is
+          <b> no known optimum</b> to compare against — for that, run the
+          <b> TSPLIB benchmark</b>, where every instance has a proven optimal length.
+        </div>
       </div>
     );
   }
@@ -95,11 +110,17 @@ export default function TourCanvas({
           {names.map((n) => <option key={n} value={n}>{n}</option>)}
         </select>
         <span className="sub">
-          {sub.cities.length} cities · known optimum {sub.optimum}
+          {sub.cities.length} cities · known optimum length {sub.optimum}
         </span>
       </div>
       <Canvas cities={sub.cities} baselineTour={baseline?.solution?.[name]}
-        bestTour={bestSolution?.[name]} width={width} height={height} />
+        bestTour={bestSolution?.[name]} baselineLabel="nearest-neighbor + 2-opt"
+        width={width} height={height} />
+      <div className="sub" style={{ marginTop: 6, lineHeight: 1.5 }}>
+        Here the baseline is already <b>nearest-neighbor + 2-opt</b>, and the known
+        optimum ({sub.optimum}) is a proven length, not a drawn tour — the agents
+        are scored by how close they get to it.
+      </div>
     </div>
   );
 }

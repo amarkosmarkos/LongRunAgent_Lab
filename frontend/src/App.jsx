@@ -80,8 +80,11 @@ export default function App() {
       <div className="topbar">
         <h1><span className="flask">⚗</span> Long Run Agent Lab</h1>
         {health && (
-          <span className="chip" title="Set ANTHROPIC_API_KEY in backend/.env for real agents">
-            {health.mock_mode ? "mock agents (no API key)" : "live Claude agents"}
+          <span className={`chip llmtag ${health.mock_mode ? "mock" : "live"}`}
+            title={health.mock_mode
+              ? "No ANTHROPIC_API_KEY set — new runs use a scripted mock LLM (solver code still really runs). Add the key to backend/.env for real agents."
+              : "ANTHROPIC_API_KEY detected — new runs call the real Claude API."}>
+            {health.mock_mode ? "◌ mock mode (no API key)" : "● live mode · real Claude agents"}
           </span>
         )}
         {health === null && <span className="chip failed">backend offline</span>}
