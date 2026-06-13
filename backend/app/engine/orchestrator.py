@@ -94,6 +94,36 @@ class Orchestrator:
             return None
         return round((self.baseline_score - score) / self.baseline_score * 100, 3)
 
+    def _run_attempt(self, code: str | None) -> tuple[dict, dict | None]:
+        """Execute one solver attempt -> (result, per-instance detail)."""
+        if not code:
+            return ({"score": None, "valid": False,
+                     "error": "no python code produced (missing ```python fence)",
+                     "exec_time": 0.0}, None)
+        out = self.problem.execute(code, self.instance,
+                                   self.cfg["experiment_timeout_s"])
+        detail = out.get("detail")
+        if out["error"]:
+            return ({"score": None, "valid": False, "error": out["error"],
+                     "exec_time": out["exec_time"]}, detail)
+        err = self.problem.validate(self.instance, out["solution"])
+        if err:
+            return ({"score": None, "valid": False,
+                     "error": f"invalid solution: {err}",
+                     "exec_time": out["exec_time"]}, detail)
+        score = self.problem.evaluate(self.instance, out["solution"])
+        return ({"score": score, "valid": True, "error": None,
+                 "exec_time": out["exec_time"], "solution": out["solution"]}, detail)
+
+    @staticmethod
+    def _retry_feedback(code: str | None, result: dict) -> str:
+        if not code:
+            return ("Your reply contained no ```python code block, so nothing ran. "
+                    "Emit the one-line JSON followed by exactly one ```python fence "
+                    "that defines solve(cities) and returns a tour.")
+        return (f"The solver you returned failed: {result['error']}. "
+                "Return a corrected, complete solver in one ```python fence.")
+
     # --------------------------------------------------------------- phases
     def execute(self):
         try:
@@ -180,49 +210,52 @@ class Orchestrator:
         attempt = b.experiments + 1
         last = getattr(b, "_last_result", None)
         critique = getattr(b, "_last_critique", None)
-        res = self._call(
-            "experimenter", agents.EXPERIMENTER_SYSTEM,
-            agents.experimenter_prompt(
-                self.problem.solver_contract(),
-                self.problem.instance_stats(self.instance),
-                {**b.public(), "best_code": b.best_code}, rnd, last, critique,
-                [i.public() for i in self.insights],
-                self.cfg["experiment_timeout_s"]),
-            context={"strategy": b.strategy, "attempt": attempt}, branch_id=b.id,
-            action=f"writing solver code (round {rnd}, attempt {attempt})")
-        try:
-            meta = agents.parse_json(res.text)
-        except Exception:
-            meta = {"approach": "(unparseable)", "expectation": ""}
-        code = agents.parse_code(res.text)
-        self.run.emit("experiment.started", agent="experimenter", branch_id=b.id,
-                      payload={"round": rnd, "attempt": attempt,
-                               "approach": meta.get("approach"),
-                               "expectation": meta.get("expectation")})
+        max_attempts = self.cfg.get("experiment_max_attempts", 3)
 
+        # Retry loop: a malformed reply (no code) or a runtime/validation error is
+        # recoverable — re-ask the experimenter immediately with the exact error,
+        # up to max_attempts, before this round counts as a failure. Each retry is
+        # emitted so the UI can draw the loop.
+        meta: dict = {"approach": "(unparseable)", "expectation": ""}
+        code = None
+        result: dict = {"score": None, "valid": False, "error": "not run", "exec_time": 0.0}
         detail = None
-        if not code:
-            result = {"score": None, "valid": False, "error": "no python code produced",
-                      "exec_time": 0.0}
-        else:
-            out = self.problem.execute(code, self.instance,
-                                       self.cfg["experiment_timeout_s"])
-            detail = out.get("detail")
-            if out["error"]:
-                result = {"score": None, "valid": False, "error": out["error"],
-                          "exec_time": out["exec_time"]}
-            else:
-                err = self.problem.validate(self.instance, out["solution"])
-                if err:
-                    result = {"score": None, "valid": False,
-                              "error": f"invalid solution: {err}",
-                              "exec_time": out["exec_time"]}
-                else:
-                    score = self.problem.evaluate(self.instance, out["solution"])
-                    result = {"score": score, "valid": True, "error": None,
-                              "exec_time": out["exec_time"],
-                              "solution": out["solution"]}
+        retry_feedback = None
+        try_i = 1
+        for try_i in range(1, max_attempts + 1):
+            action = (f"writing solver code (round {rnd}, attempt {attempt})"
+                      if try_i == 1 else
+                      f"fixing error (round {rnd}, retry {try_i}/{max_attempts})")
+            res = self._call(
+                "experimenter", agents.EXPERIMENTER_SYSTEM,
+                agents.experimenter_prompt(
+                    self.problem.solver_contract(),
+                    self.problem.instance_stats(self.instance),
+                    {**b.public(), "best_code": b.best_code}, rnd, last, critique,
+                    [i.public() for i in self.insights],
+                    self.cfg["experiment_timeout_s"], retry_feedback=retry_feedback),
+                context={"strategy": b.strategy, "attempt": attempt}, branch_id=b.id,
+                action=action)
+            try:
+                meta = agents.parse_json(res.text)
+            except Exception:
+                meta = {"approach": "(unparseable)", "expectation": ""}
+            code = agents.parse_code(res.text)
+            if try_i == 1:
+                self.run.emit("experiment.started", agent="experimenter", branch_id=b.id,
+                              payload={"round": rnd, "attempt": attempt,
+                                       "approach": meta.get("approach"),
+                                       "expectation": meta.get("expectation")})
+            result, detail = self._run_attempt(code)
+            if result["valid"] or try_i == max_attempts:
+                break
+            retry_feedback = self._retry_feedback(code, result)
+            self.run.emit("experiment.retry", agent="experimenter", branch_id=b.id,
+                          payload={"round": rnd, "attempt": attempt, "retry": try_i,
+                                   "max_attempts": max_attempts,
+                                   "reason": result["error"]})
 
+        retries = try_i - 1
         improved = (result["valid"] and
                     (b.best_score is None or result["score"] < b.best_score))
         beats_baseline = result["valid"] and result["score"] < self.baseline_score
@@ -250,6 +283,7 @@ class Orchestrator:
             "branch_best_score": b.best_score,
             "improvement_pct": self._improvement_pct(result["score"]) if result["valid"] else None,
             "detail": detail,
+            "retries": retries,
         }
         if result["valid"]:
             ev_payload["solution"] = result["solution"]

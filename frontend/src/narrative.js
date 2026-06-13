@@ -8,6 +8,7 @@ const DEFAULT_AGENT = {
   "scope.defined": "planner",
   "hypotheses.proposed": "strategist",
   "experiment.completed": "experimenter",
+  "experiment.retry": "experimenter",
   "critique.added": "critic",
   "insight.added": "critic",
   "supervisor.decision": "supervisor",
@@ -52,6 +53,13 @@ export function narrate(ev, state) {
         };
       return { agent: "strategist", text: `Opened branch "${b.name}" — ${b.hypothesis}` };
     }
+    case "experiment.retry":
+      return {
+        agent,
+        text: `Round ${p.round} on "${bname(ev.branch_id)}" hit an error ` +
+          `(${p.reason}) — auto-retrying (${p.retry}/${(p.max_attempts || 1) - 1}) ` +
+          `instead of abandoning the branch.`,
+      };
     case "experiment.completed": {
       const name = bname(ev.branch_id);
       if (!p.valid)

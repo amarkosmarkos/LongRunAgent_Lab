@@ -4,6 +4,19 @@
 import React, { useEffect, useRef, useState } from "react";
 import { fmtScore } from "../format.js";
 
+// TSPLIB EUC_2D metric: each edge rounded to the nearest integer (matches backend)
+function tourLenEuc2d(cities, tour) {
+  if (!tour || !tour.length) return null;
+  let total = 0;
+  for (let i = 0; i < tour.length; i++) {
+    const [x1, y1] = cities[tour[i]];
+    const [x2, y2] = cities[tour[(i + 1) % tour.length]];
+    total += Math.round(Math.hypot(x2 - x1, y2 - y1));
+  }
+  return total;
+}
+const gapPct = (len, opt) => Math.round(((len - opt) / opt) * 1000) / 10;
+
 function Canvas({ cities, baselineTour, bestTour, baselineLabel, width, height }) {
   const ref = useRef(null);
   const [show, setShow] = useState("both"); // baseline | best | both
@@ -103,23 +116,60 @@ export default function TourCanvas({
   const name = sel && names.includes(sel) ? sel : names[0];
   const sub = instance.instances?.[name];
   if (!sub) return <div className="empty">No benchmark instances.</div>;
+
+  const baseTour = baseline?.solution?.[name];
+  const bestTour = bestSolution?.[name];
+  const baseLen = tourLenEuc2d(sub.cities, baseTour);
+  const bestLen = tourLenEuc2d(sub.cities, bestTour);
+  const baseGap = baseLen != null ? gapPct(baseLen, sub.optimum) : null;
+  const bestGap = bestLen != null ? gapPct(bestLen, sub.optimum) : null;
+  const reached = bestGap != null && bestGap <= 0.05;
+  // how much of the baseline's gap-to-optimum the agents closed
+  const gapClosed = baseGap && bestGap != null && baseGap > 0
+    ? Math.round(((baseGap - bestGap) / baseGap) * 1000) / 10 : null;
+
   return (
     <div>
       <div style={{ display: "flex", gap: 8, marginBottom: 6, alignItems: "center" }}>
         <select value={name} onChange={(e) => setSel(e.target.value)}>
           {names.map((n) => <option key={n} value={n}>{n}</option>)}
         </select>
-        <span className="sub">
-          {sub.cities.length} cities · known optimum length {sub.optimum}
-        </span>
+        <span className="sub">{sub.cities.length} cities</span>
       </div>
-      <Canvas cities={sub.cities} baselineTour={baseline?.solution?.[name]}
-        bestTour={bestSolution?.[name]} baselineLabel="nearest-neighbor + 2-opt"
-        width={width} height={height} />
+
+      <div className="optboard">
+        <div className="optrow">
+          <span className="lab gold">optimum (proven best)</span>
+          <span className="val">{sub.optimum}</span>
+          <span className="gap">0%</span>
+        </div>
+        <div className="optrow">
+          <span className="lab gray">baseline · nearest-neighbor + 2-opt</span>
+          <span className="val">{baseLen ?? "—"}</span>
+          <span className="gap">{baseGap != null ? `+${baseGap}%` : "—"}</span>
+        </div>
+        <div className="optrow">
+          <span className="lab green">agents' best</span>
+          <span className="val">{bestLen ?? "—"}</span>
+          <span className={`gap ${reached ? "good" : ""}`}>
+            {bestGap != null ? (reached ? "+0% ✓ optimal" : `+${bestGap}%`) : "—"}
+          </span>
+        </div>
+      </div>
+      {gapClosed != null && (
+        <div className="sub" style={{ margin: "2px 0 8px" }}>
+          The agents closed <b>{gapClosed}%</b> of the gap between the baseline and
+          the proven optimum{reached ? " — they reached the optimal tour." : "."}
+        </div>
+      )}
+
+      <Canvas cities={sub.cities} baselineTour={baseTour} bestTour={bestTour}
+        baselineLabel="nearest-neighbor + 2-opt" width={width} height={height} />
       <div className="sub" style={{ marginTop: 6, lineHeight: 1.5 }}>
-        Here the baseline is already <b>nearest-neighbor + 2-opt</b>, and the known
-        optimum ({sub.optimum}) is a proven length, not a drawn tour — the agents
-        are scored by how close they get to it.
+        The optimum ({sub.optimum}) is a <b>proven length</b>, not a drawn tour.
+        {reached
+          ? " Since the agents reached it, the green tour above IS an optimal tour."
+          : " The agents are scored by how close the green tour gets to it (gap %)."}
       </div>
     </div>
   );

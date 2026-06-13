@@ -99,14 +99,23 @@ Return JSON:
 # ----------------------------------------------------------- experimenter
 EXPERIMENTER_SYSTEM = (
     "You are an Experimenter in an autonomous research lab. You write correct, fast, "
-    "pure-Python solver code to test a hypothesis. Respond with a JSON object "
-    "followed by exactly one ```python code fence."
+    "pure-Python solver code to test a hypothesis.\n"
+    "Your reply MUST have exactly two parts, in this order and nothing else:\n"
+    "  1. a single-line JSON object: "
+    '{\"approach\": \"...\", \"expectation\": \"...\"}\n'
+    "  2. exactly one fenced code block opened with a line containing only ```python "
+    "and closed with a line containing only ``` — inside it, the COMPLETE solver "
+    "defining `def solve(cities): ...` and returning a tour (a list of int).\n"
+    "Do not add prose before, between, or after these two parts. Do not use any "
+    "other code fence. If you omit the ```python block the experiment is a total "
+    "failure, so never describe code in words — always emit the runnable block."
 )
 
 
 def experimenter_prompt(contract: str, stats: str, branch: dict, round_: int,
                         last_result: dict | None, critique: str | None,
-                        insights: list[dict], time_limit_s: int) -> str:
+                        insights: list[dict], time_limit_s: int,
+                        retry_feedback: str | None = None) -> str:
     parts = [f"""You work on branch "{branch['name']}".
 HYPOTHESIS: {branch['hypothesis']}
 STRATEGY: {branch['strategy']}
@@ -124,9 +133,19 @@ INSTANCE: {stats}"""]
     if insights:
         lines = "\n".join(f"- [{i['branch_id']}] {i['text']}" for i in insights)
         parts.append(f"SHARED LAB KNOWLEDGE (from all branches):\n{lines}")
-    parts.append("""First a JSON object:
+    if retry_feedback:
+        # the previous attempt this same round failed before producing a score;
+        # tell the model exactly what broke so it can fix it immediately
+        parts.append("YOUR PREVIOUS ATTEMPT THIS ROUND FAILED — fix it now.\n"
+                     f"{retry_feedback}")
+    parts.append("""Reply with exactly these two parts and nothing else:
 {"approach": "<one sentence: what you changed and why>", "expectation": "<expected effect>"}
-Then exactly one ```python fence containing the complete solver (must define solve(cities)).""")
+```python
+# complete, runnable solver
+def solve(cities):
+    ...
+    return tour  # list[int], a permutation of range(len(cities))
+```""")
     return "\n\n".join(parts)
 
 

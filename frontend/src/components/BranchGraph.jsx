@@ -13,9 +13,11 @@ const COLORS = {
   failed: "#c93b3b",
   collapsed: "#c93b3b",
   winner: "#a8780f",
+  retry: "#a87410",
 };
 const EDGE = "#d8d4c8";
 const MERGE = "#6f63d2";
+const RETRY = "#d9a441";
 const GUIDE = "#eeebe1";
 const TEXT_MUTED = "#737167";
 const TEXT_FAINT = "#a3a094";
@@ -73,6 +75,12 @@ function tooltipFor(n, branches) {
       return {
         title: `Winner: ${b?.name || ""}`,
         lines: ["Best verified solution of the run."],
+      };
+    case "retry":
+      return {
+        title: `Auto-retry ${n.retry}/${(n.maxAttempts || 1) - 1}`,
+        lines: ["The experiment failed and was re-asked immediately instead of "
+          + "killing the branch.", n.label || "", "Click for details."],
       };
     default:
       return null;
@@ -135,14 +143,17 @@ export default function BranchGraph({ graph, branches, activity, selectedSeq, on
           const [x1, y1] = nodeXY(a);
           const [x2, y2] = nodeXY(b);
           const midY = (y1 + y2) / 2;
-          const path = x1 === x2
-            ? `M ${x1} ${y1} L ${x2} ${y2}`
-            : `M ${x1} ${y1} C ${x1} ${midY}, ${x2} ${midY}, ${x2} ${y2}`;
-          const color = e.kind === "merge" ? MERGE : EDGE;
+          // retry edges bow out to the right to read as a loop-back
+          const path = e.kind === "retry"
+            ? `M ${x1} ${y1} C ${x1 + 26} ${midY}, ${x2 + 26} ${midY}, ${x2} ${y2}`
+            : x1 === x2
+              ? `M ${x1} ${y1} L ${x2} ${y2}`
+              : `M ${x1} ${y1} C ${x1} ${midY}, ${x2} ${midY}, ${x2} ${y2}`;
+          const color = e.kind === "merge" ? MERGE : e.kind === "retry" ? RETRY : EDGE;
           return (
             <path key={i} d={path} fill="none" stroke={color}
               strokeWidth={e.kind === "merge" ? 2 : 1.6}
-              strokeDasharray={e.kind === "spawn" ? "4 3" : "none"} />
+              strokeDasharray={e.kind === "spawn" || e.kind === "retry" ? "4 3" : "none"} />
           );
         })}
 
@@ -178,6 +189,11 @@ export default function BranchGraph({ graph, branches, activity, selectedSeq, on
               ) : n.kind === "scope" || n.kind === "created" ? (
                 <circle cx={x} cy={y} r={7} fill="#fff"
                   stroke={isMerge ? MERGE : color} strokeWidth="2.5" />
+              ) : n.kind === "retry" ? (
+                <g>
+                  <circle cx={x} cy={y} r={6.5} fill="#faf0da" stroke={RETRY} strokeWidth="1.8" />
+                  <text x={x} y={y + 3.5} textAnchor="middle" fontSize="9.5" fill={RETRY}>↻</text>
+                </g>
               ) : (
                 <circle cx={x} cy={y} r={7} fill={color} />
               )}
@@ -199,6 +215,10 @@ export default function BranchGraph({ graph, branches, activity, selectedSeq, on
               )}
               {n.kind === "collapsed" && (
                 <text x={x + 14} y={y + 4} fontSize="10" fill={color}>collapsed</text>
+              )}
+              {n.kind === "retry" && (
+                <text x={x + 13} y={y + 4} fontSize="9.5" fill={COLORS.retry}>
+                  retry {n.retry} · {(n.label || "").slice(0, 26)}</text>
               )}
             </g>
           );
@@ -242,6 +262,7 @@ export function GraphLegend() {
       <span><span className="dot" style={{ background: "var(--green)" }} /> improved</span>
       <span><span className="dot" style={{ background: "var(--faint)" }} /> no gain</span>
       <span><span className="dot" style={{ background: "var(--red)" }} /> failed</span>
+      <span style={{ color: "#a87410" }}>↻ auto-retry</span>
       <span style={{ color: "var(--red)" }}>⊘ collapsed</span>
       <span style={{ color: "var(--purple)" }}>— merge</span>
       <span style={{ color: "var(--gold)" }}>★ winner</span>

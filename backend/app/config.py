@@ -35,6 +35,9 @@ DEFAULT_RUN_CONFIG = {
     "max_rounds": 5,
     "budget_usd": 2.0,
     "experiment_timeout_s": 10,
+    # immediate retries when an experiment reply has no code / errors / is invalid,
+    # before the round counts as a failure
+    "experiment_max_attempts": 3,
     # high enough that no single basic strategy reaches it -> forces real exploration
     "target_improvement_pct": 18.0,
     "stagnation_rounds": 2,

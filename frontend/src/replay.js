@@ -200,6 +200,18 @@ export function buildGraph(events, cursor) {
         lastNode[b.id] = id;
         break;
       }
+      case "experiment.retry": {
+        // a recoverable failure that was re-asked immediately — draw the loop
+        const id = push({
+          id: `n${ev.seq}`, kind: "retry", lane: lanes[ev.branch_id] ?? 0,
+          row: row++, label: p.reason || "retry", branch_id: ev.branch_id,
+          seq: ev.seq, retry: p.retry, maxAttempts: p.max_attempts, round: p.round,
+        });
+        if (lastNode[ev.branch_id])
+          edges.push({ from: lastNode[ev.branch_id], to: id, kind: "retry" });
+        lastNode[ev.branch_id] = id;
+        break;
+      }
       case "experiment.completed": {
         const kind = !p.valid ? "failed" : p.improved ? "improved" : "neutral";
         const id = push({
@@ -209,7 +221,8 @@ export function buildGraph(events, cursor) {
           score: p.score, round: p.round, beats: p.beats_baseline,
         });
         if (lastNode[ev.branch_id])
-          edges.push({ from: lastNode[ev.branch_id], to: id, kind: "line" });
+          edges.push({ from: lastNode[ev.branch_id], to: id,
+            kind: p.retries ? "retry" : "line" });
         lastNode[ev.branch_id] = id;
         break;
       }

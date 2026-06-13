@@ -275,6 +275,25 @@ pre.code {
 .activitybar .dots i:nth-child(2) { animation-delay: 0.18s; }
 .activitybar .dots i:nth-child(3) { animation-delay: 0.36s; }
 
+/* ---- tour map optimum board ---- */
+.optboard {
+  border: 1px solid var(--border); border-radius: 8px; overflow: hidden;
+  margin: 6px 0 8px; background: var(--surface);
+}
+.optrow {
+  display: grid; grid-template-columns: 1fr auto 86px; gap: 10px; align-items: center;
+  padding: 6px 10px; font-size: 12.5px; border-bottom: 1px solid var(--surface2);
+}
+.optrow:last-child { border-bottom: none; }
+.optrow .lab { color: var(--muted); display: inline-flex; align-items: center; gap: 7px; }
+.optrow .lab::before { content: ""; width: 11px; height: 3px; border-radius: 2px; background: currentColor; }
+.optrow .lab.gold { color: var(--gold); }
+.optrow .lab.gray { color: #9b968a; }
+.optrow .lab.green { color: var(--green); }
+.optrow .val { font-family: var(--mono); }
+.optrow .gap { font-family: var(--mono); text-align: right; color: var(--muted); }
+.optrow .gap.good { color: var(--green); font-weight: 600; }
+
 /* ---- prompt inspector ---- */
 .promptblock { margin: 8px 0; }
 .promptblock summary {

@@ -458,6 +458,9 @@ export function DetailPanel({ state, events, selectedSeq, onSelect }) {
               {p.improvement_pct != null ? `${p.improvement_pct}%` : "—"}</span>
             <span className="k">improved branch</span><span className="v">{String(p.improved)}</span>
             <span className="k">exec time</span><span className="v">{p.exec_time}s</span>
+            {p.retries > 0 && (<><span className="k">auto-retries</span>
+              <span className="v" style={{ color: "var(--amber)" }}>
+                {p.retries} (recovered before failing the round)</span></>)}
             {p.error && (<><span className="k">error</span>
               <span className="v" style={{ color: "var(--red)" }}>{p.error}</span></>)}
           </div>
