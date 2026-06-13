@@ -305,17 +305,36 @@ class Orchestrator:
         try:
             dec = agents.parse_json(res.text)
         except Exception:
-            dec = {"new_hypotheses": [], "continue": True, "reasoning": res.text[:300]}
-        room = max(0, self.cfg["max_branches"] - len(self._active()))
-        spawned = []
-        for h in (dec.get("new_hypotheses") or [])[:room]:
+            dec = {"new_hypotheses": [], "evolve": [], "continue": True,
+                   "reasoning": res.text[:300]}
+        spawned, evolved = [], []
+        # EVOLVE: fork an existing branch, carrying over its best code so the new
+        # branch builds on established progress instead of starting from zero
+        for e in (dec.get("evolve") or []):
+            if len(self._active()) >= self.cfg["max_branches"]:
+                break
+            parent = self.branches.get(e.get("parent_id"))
+            if not parent:
+                continue
+            b = self._create_branch(e.get("name", "evolved"), e.get("hypothesis", ""),
+                                    e.get("strategy", parent.strategy), [parent.id],
+                                    extra={"risk": e.get("risk"), "planner_round": rnd,
+                                           "evolved_from": parent.id})
+            b.best_code = parent.best_code  # seed with the parent's best solver
+            b.best_score = parent.best_score
+            b.best_solution = parent.best_solution
+            evolved.append(b.id)
+        # NEW: brand-new directions from scratch
+        for h in (dec.get("new_hypotheses") or []):
+            if len(self._active()) >= self.cfg["max_branches"]:
+                break
             b = self._create_branch(h.get("name", "unnamed"), h.get("hypothesis", ""),
-                                     h.get("strategy", "unknown"), [],
-                                     extra={"risk": h.get("risk"), "planner_round": rnd})
+                                    h.get("strategy", "unknown"), [],
+                                    extra={"risk": h.get("risk"), "planner_round": rnd})
             spawned.append(b.id)
         self.run.emit("planner.review", agent="planner", payload={
             "round": rnd, "reasoning": dec.get("reasoning"),
-            "new_branch_ids": spawned,
+            "new_branch_ids": spawned, "evolved_branch_ids": evolved,
             "continue": bool(dec.get("continue", True))})
         return bool(dec.get("continue", True))
 

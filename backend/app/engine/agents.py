@@ -112,10 +112,19 @@ Keep it actionable — the lab will turn this into testable hypotheses."""
 PLANNER_REVIEW_SYSTEM = (
     "You are the Planner of an autonomous research lab, reviewing progress at the "
     "end of a round. You look at every branch's results and the shared insights, "
-    "then DESIGN NEW hypotheses to explore next (new directions the evidence now "
-    "suggests) and decide whether the run should continue. You are not limited to "
-    "a fixed number of branches — add as many promising new directions as the "
-    "evidence justifies, within the cap. Respond with a single JSON object only."
+    "then steer what happens next. The lab improves in several ways and you control "
+    "two of them:\n"
+    " - Every active branch is ALREADY refined in place each round by its "
+    "Experimenter (it iterates on its own best code). You don't need to ask for "
+    "that — it happens automatically.\n"
+    " - You may EVOLVE an existing branch: fork it (keeping its current best code) "
+    "and push it in a specific new direction — the right move when a path is "
+    "promising and you want a variation without losing its progress.\n"
+    " - You may open brand-NEW hypotheses from scratch — for genuinely different "
+    "directions the evidence now suggests.\n"
+    "(The Supervisor separately collapses weak branches and merges complementary "
+    "pairs.) You are not limited to a fixed number of branches. Respond with a "
+    "single JSON object only."
 )
 
 
@@ -128,21 +137,28 @@ def planner_review_prompt(round_: int, max_rounds: int, branches: list[dict],
 
 BASELINE: {baseline_score} (lower is better). BEST SO FAR: {best_score}. TARGET: {target_pct}% improvement.
 BUDGET: ${budget_spent:.4f} of ${budget_usd}. ACTIVE BRANCHES: {active_count} (hard cap {max_branches}).
-BRANCHES (with results): {json.dumps(branches)}
+BRANCHES (with results, including their id and best_score): {json.dumps(branches)}
 SHARED INSIGHTS: {json.dumps(insights)}
 
-Based on the EVIDENCE so far, design new hypotheses worth trying next — genuinely
-new directions (not restating existing branches). Add none if nothing new is
-justified. Do not exceed the active-branch cap.
+Prefer EVOLVING a promising existing branch over starting from scratch when the
+evidence says a path is working and just needs a variation. Open new-from-scratch
+hypotheses only for genuinely different directions. Add nothing if nothing is
+justified. Never exceed the active-branch cap.
 Return JSON:
 {{
+  "evolve": [
+    {{"parent_id": "<id of an existing branch to fork (keeps its code)>",
+      "name": "<short name>", "strategy": "<algorithm family>",
+      "hypothesis": "<the specific variation to try, grounded in that branch's results>",
+      "risk": "<main reason this could fail>"}}
+  ],
   "new_hypotheses": [
     {{"name": "<short name>", "strategy": "<algorithm family>",
       "hypothesis": "<falsifiable claim grounded in the evidence above>",
       "risk": "<main reason this could fail>"}}
   ],
   "continue": <true|false: should the run keep going?>,
-  "reasoning": "<what the round showed and why these new directions>"
+  "reasoning": "<what the round showed and why these directions>"
 }}"""
 
 
@@ -190,9 +206,11 @@ EXPERIMENTER_SYSTEM = (
     "failure, so never describe code in words — always emit the runnable block.\n"
     "The code MUST be complete and self-contained: define every function and name "
     "you use, no '...' placeholders, no TODOs, no references to earlier messages. "
-    "It MUST be time-bounded: capture t0 = time.time() at the start of solve() and "
-    "stop improving once the time budget is reached, returning the best tour found "
-    "so far — a solver that can exceed the time limit is a failed solver. "
+    "It MUST be time-bounded with MARGIN: derive the budget from the instance size "
+    "(budget = 0.04 * len(cities) seconds), capture t0 = time.time(), and check the "
+    "clock INSIDE long loops — not only between sweeps — returning the best tour so "
+    "far before the budget. Timeouts are the most common failure; a solver that can "
+    "exceed the time limit is a failed solver. "
     "Keep it compact enough to fit well within the output limit (trim comments)."
 )
 
@@ -223,20 +241,27 @@ INSTANCE: {stats}"""]
         # tell the model exactly what broke so it can fix it immediately
         parts.append("YOUR PREVIOUS ATTEMPT THIS ROUND FAILED — fix it now.\n"
                      f"{retry_feedback}")
-    budget = max(1, time_limit_s - 1)
-    parts.append(f"""Reply with exactly these two parts and nothing else. The code must be
-COMPLETE (define everything, no placeholders) and TIME-BOUNDED (stop before {budget}s):
-{{"approach": "<one sentence: what you changed and why>", "expectation": "<expected effect>"}}
+    parts.append("""Reply with exactly these two parts and nothing else. The code must be
+COMPLETE (define everything, no placeholders) and strictly TIME-BOUNDED.
+TIMEOUTS ARE THE #1 FAILURE — avoid them with margin:
+- Derive your budget from the instance size: `budget = 0.04 * len(cities)` seconds.
+  You are given MORE wall time than that, so staying under it guarantees no timeout.
+- Check `time.time() - t0` INSIDE every long loop (e.g. inside a 2-opt/Or-opt sweep),
+  not only between sweeps — a single full sweep on a few hundred cities can take >1s.
+  Never START a sweep or restart you cannot finish before the budget.
+- For large n, use k-nearest candidate lists; do NOT build a full n*n matrix or use
+  O(n^3) moves.
+{"approach": "<one sentence: what you changed and why>", "expectation": "<expected effect>"}
 ```python
 import time
 
 def solve(cities):
     t0 = time.time()
-    budget = {budget}            # seconds — must return before the {time_limit_s}s hard limit
     n = len(cities)
-    best = list(range(n))        # replace with a real construction + improvement loop
+    budget = 0.04 * n            # seconds; you get more wall than this — stay well under it
+    best = list(range(n))        # replace with NN/greedy construction + local search
     while time.time() - t0 < budget:
-        ...                      # improve `best`; break/return when time runs out
+        ...                      # one improvement step; check time.time()-t0 inside long sweeps too
     return best                  # a permutation of range(n)
 ```""")
     return "\n\n".join(parts)

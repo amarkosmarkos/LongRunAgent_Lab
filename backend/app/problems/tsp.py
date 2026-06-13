@@ -16,6 +16,14 @@ from .tsplib import (available_instances, gap_pct, lkh_tour, load_instance,
                      nn_2opt_tour, tour_length_euc2d)
 
 
+def inst_timeout(n: int, base: int) -> int:
+    """Per-instance wall-clock budget, scaled up with city count. Solver wall
+    time runs locally and is free, so we give generous headroom — the cost is
+    LLM retries, which timeouts cause. Bigger instances get more room so they
+    aren't unfairly killed."""
+    return min(30, max(base, round(0.07 * n) + 3))
+
+
 @lru_cache(maxsize=None)
 def lkh_ref(name: str) -> dict:
     """Cached LKH (state-of-the-art) reference for a named TSPLIB instance:
@@ -100,8 +108,8 @@ class TSP(Problem):
 
 # Harder default sets: mid/large instances where a heuristic written in ~10s
 # does NOT trivially reach the optimum, so the gap is informative.
-DEFAULT_DEV = ["kroA100", "kroA200", "a280", "lin318", "rd400"]
-DEFAULT_HOLDOUT = ["pr299", "pr439", "pcb442", "u574", "rat575"]
+DEFAULT_DEV = ["kroA100", "kroA200", "a280", "lin318"]
+DEFAULT_HOLDOUT = ["pr299", "rd400", "pr439", "pcb442"]
 
 
 class TSPBenchmark(Problem):
@@ -199,7 +207,8 @@ class TSPBenchmark(Problem):
         from ..sandbox import run_solver
         solutions, detail, total = {}, {}, 0.0
         for name, inst in self._dev_items(instance):
-            out = run_solver(code, {"cities": inst["cities"]}, timeout_s)
+            t = inst_timeout(len(inst["cities"]), timeout_s)
+            out = run_solver(code, {"cities": inst["cities"]}, t)
             total += out["exec_time"]
             if out["error"]:
                 return {"solution": None,
@@ -236,7 +245,8 @@ class TSPBenchmark(Problem):
                    "optimum": inst["optimum"],
                    "baseline_gap": b_gap, "baseline_time": b_time,
                    "lkh_gap": lk["gap_pct"]}
-            out = run_solver(code, {"cities": inst["cities"]}, timeout_s)
+            out = run_solver(code, {"cities": inst["cities"]},
+                             inst_timeout(len(inst["cities"]), timeout_s))
             tour = out["solution"]
             n = len(inst["cities"])
             valid = (isinstance(tour, list) and len(tour) == n

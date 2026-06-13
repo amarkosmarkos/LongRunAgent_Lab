@@ -47,12 +47,16 @@ export function narrate(ev, state) {
       };
     case "planner.review": {
       const n = (p.new_branch_ids || []).length;
+      const ev = (p.evolved_branch_ids || []).length;
       if (!p.continue) return { agent, text: `Reviewed the round and concluded the run. ${p.reasoning || ""}` };
+      const bits = [];
+      if (ev) bits.push(`evolved ${ev} promising branch${ev === 1 ? "" : "es"}`);
+      if (n) bits.push(`opened ${n} new direction${n === 1 ? "" : "s"}`);
       return {
         agent,
-        text: n > 0
-          ? `Reviewed the round's results and opened ${n} new hypothes${n === 1 ? "is" : "es"} to explore next. ${p.reasoning || ""}`
-          : `Reviewed the round's results — no new directions warranted. ${p.reasoning || ""}`,
+        text: bits.length
+          ? `Reviewed the round's results and ${bits.join(" and ")}. ${p.reasoning || ""}`
+          : `Reviewed the round's results — branches continue refining in place. ${p.reasoning || ""}`,
       };
     }
     case "hypotheses.proposed":
@@ -62,6 +66,11 @@ export function narrate(ev, state) {
       };
     case "branch.created": {
       const b = p.branch || {};
+      if (p.evolved_from)
+        return {
+          agent: "planner",
+          text: `Evolved "${bname(p.evolved_from)}" into "${b.name}" (keeps its code) — ${b.hypothesis}`,
+        };
       if (b.parent_ids?.length)
         return {
           agent: "supervisor",
