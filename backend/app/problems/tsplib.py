@@ -19,6 +19,9 @@ OPTIMA = {
     "rd100": 7910, "eil101": 629, "lin105": 14379, "ch130": 6110,
     "ch150": 6528, "kroA150": 26524, "rat195": 2323, "d198": 15780,
     "kroA200": 29368,
+    # harder, larger instances — out of reach of a plain heuristic in seconds
+    "a280": 2579, "pr299": 48191, "lin318": 42029, "rd400": 15281,
+    "pr439": 107217, "pcb442": 50778, "u574": 36905, "rat575": 6773,
 }
 
 
@@ -67,10 +70,25 @@ def gap_pct(length: float, optimum: float) -> float:
     return round((length - optimum) / optimum * 100, 3)
 
 
-def nn_2opt_tour(cities: list[list[float]]) -> list[int]:
-    """Strong classical baseline: nearest-neighbor construction followed by
-    2-opt local search to a local optimum (first-improvement passes), all on
-    the TSPLIB rounded metric. Typical gap on TSPLIB: ~4-6% above optimum."""
+def lkh_tour(cities: list[list[float]]) -> list[int]:
+    """State-of-the-art reference: Lin-Kernighan-Helsgaun (LKH) via elkai.
+    Reaches the proven optimum on essentially every TSPLIB instance this size.
+    Uses the same rounded-integer (EUC_2D) metric as scoring."""
+    import elkai
+    n = len(cities)
+    D = [[euc2d(cities[i], cities[j]) for j in range(n)] for i in range(n)]
+    tour = list(elkai.DistanceMatrix(D).solve_tsp())
+    if len(tour) > n and tour[-1] == tour[0]:
+        tour = tour[:-1]
+    return tour
+
+
+def nn_2opt_tour(cities: list[list[float]], time_limit: float = 8.0) -> list[int]:
+    """Classical baseline: nearest-neighbor construction followed by 2-opt local
+    search (first-improvement passes), on the TSPLIB rounded metric. Typical gap:
+    ~4-8% above optimum. `time_limit` caps the 2-opt phase so large instances
+    don't stall the run (it returns the best tour found so far)."""
+    import time as _time
     n = len(cities)
     # nearest-neighbor from city 0
     unvisited = set(range(1, n))
@@ -82,12 +100,15 @@ def nn_2opt_tour(cities: list[list[float]]) -> list[int]:
         unvisited.remove(nxt)
         tour.append(nxt)
 
-    # 2-opt until no improving move is found
+    # 2-opt until no improving move is found (or the time cap is hit)
+    deadline = _time.time() + time_limit
     d = lambda i, j: euc2d(cities[i], cities[j])
     improved = True
-    while improved:
+    while improved and _time.time() < deadline:
         improved = False
         for i in range(n - 1):
+            if _time.time() > deadline:
+                break
             a, b = tour[i], tour[i + 1]
             d_ab = d(a, b)
             for j in range(i + 2, n):

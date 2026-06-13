@@ -404,9 +404,30 @@ _INSIGHTS = {
 
 
 def mock_call(role: str, ctx: dict) -> str:
+    if role == "researcher":
+        return ("State-of-the-art for Euclidean TSP at this size:\n"
+                "- Lin-Kernighan-Helsgaun (LKH) reaches ~0% gap in seconds; the "
+                "practical gold standard.\n"
+                "- Or-opt + 2-opt inside an iterated local search with double-bridge "
+                "perturbation typically lands within ~1-3% of optimum in a few seconds.\n"
+                "- Candidate lists (k-nearest) and don't-look bits are essential for "
+                "speed on larger instances.\n"
+                "- Pitfall: unbounded local search times out; always keep a wall-clock "
+                "budget and return the best-so-far.")
+
+    if role == "planner" and ctx.get("review"):
+        # planner reviews the round; the mock keeps the demo arc stable by not
+        # spawning extra branches (real mode generates new hypotheses here)
+        rnd = ctx.get("round", 1)
+        return json.dumps({
+            "new_hypotheses": [],
+            "continue": True,
+            "reasoning": f"Round {rnd}: branches are differentiating; continue and let the supervisor prune/merge."})
+
     if role == "planner":
         cfg = ctx.get("config", {})
         return json.dumps({
+            "initial_hypotheses": cfg.get("num_hypotheses", 4),
             "objective": "Find a closed tour at least {:.0f}% shorter than the nearest-neighbor baseline on this instance.".format(cfg.get("target_improvement_pct", 18)),
             "success_criteria": {
                 "target_improvement_pct": cfg.get("target_improvement_pct", 18.0),

@@ -21,6 +21,10 @@ export const AGENTS = {
     label: "Supervisor", color: "var(--agent-supervisor)", initials: "SU",
     blurb: "collapses, merges and declares winners",
   },
+  researcher: {
+    label: "Researcher", color: "var(--agent-researcher)", initials: "RE",
+    blurb: "searches the web for state-of-the-art approaches",
+  },
 };
 
 export function agentMeta(name) {

@@ -17,7 +17,7 @@ function tourLenEuc2d(cities, tour) {
 }
 const gapPct = (len, opt) => Math.round(((len - opt) / opt) * 1000) / 10;
 
-function Canvas({ cities, baselineTour, bestTour, baselineLabel, width, height }) {
+function Canvas({ cities, baselineTour, bestTour, lkhTour, baselineLabel, width, height }) {
   const ref = useRef(null);
   const [show, setShow] = useState("both"); // baseline | best | both
 
@@ -49,6 +49,7 @@ function Canvas({ cities, baselineTour, bestTour, baselineLabel, width, height }
     };
 
     if (show !== "best") drawTour(baselineTour, "#cfcbbf", 1.3);
+    if (lkhTour && show === "both") drawTour(lkhTour, "#a8780f", 1.2);
     if (show !== "baseline") drawTour(bestTour, "#2b8a4f", 1.9);
 
     ctx.fillStyle = "#44423c";
@@ -57,7 +58,7 @@ function Canvas({ cities, baselineTour, bestTour, baselineLabel, width, height }
       ctx.arc(sx(x), sy(y), 2.4, 0, Math.PI * 2);
       ctx.fill();
     });
-  }, [cities, baselineTour, bestTour, show]);
+  }, [cities, baselineTour, bestTour, lkhTour, show]);
 
   const blbl = baselineLabel || "baseline";
   return (
@@ -71,6 +72,7 @@ function Canvas({ cities, baselineTour, bestTour, baselineLabel, width, height }
         <span className="sub">
           <b style={{ color: "#9b968a" }}>gray</b> = starting tour ({blbl}) ·{" "}
           <b style={{ color: "#2b8a4f" }}>green</b> = best the agents found
+          {lkhTour ? <> · <b style={{ color: "#a8780f" }}>gold</b> = LKH (state-of-the-art)</> : null}
         </span>
       </div>
       <canvas ref={ref} width={width} height={height}
@@ -123,6 +125,7 @@ export default function TourCanvas({
   const bestLen = tourLenEuc2d(sub.cities, bestTour);
   const baseGap = baseLen != null ? gapPct(baseLen, sub.optimum) : null;
   const bestGap = bestLen != null ? gapPct(bestLen, sub.optimum) : null;
+  const lk = instance.lkh?.[name]; // state-of-the-art (LKH) reference
   const reached = bestGap != null && bestGap <= 0.05;
   // how much of the baseline's gap-to-optimum the agents closed
   const gapClosed = baseGap && bestGap != null && baseGap > 0
@@ -143,6 +146,13 @@ export default function TourCanvas({
           <span className="val">{sub.optimum}</span>
           <span className="gap">0%</span>
         </div>
+        {lk && (
+          <div className="optrow">
+            <span className="lab lkh">LKH · state-of-the-art solver</span>
+            <span className="val">{lk.length}</span>
+            <span className="gap">{lk.gap_pct === 0 ? "+0% (optimal)" : `+${lk.gap_pct}%`}</span>
+          </div>
+        )}
         <div className="optrow">
           <span className="lab gray">baseline · nearest-neighbor + 2-opt</span>
           <span className="val">{baseLen ?? "—"}</span>
@@ -164,7 +174,8 @@ export default function TourCanvas({
       )}
 
       <Canvas cities={sub.cities} baselineTour={baseTour} bestTour={bestTour}
-        baselineLabel="nearest-neighbor + 2-opt" width={width} height={height} />
+        lkhTour={lk?.tour} baselineLabel="nearest-neighbor + 2-opt"
+        width={width} height={height} />
       <div className="sub" style={{ marginTop: 6, lineHeight: 1.5 }}>
         The optimum ({sub.optimum}) is a <b>proven length</b>, not a drawn tour.
         {reached

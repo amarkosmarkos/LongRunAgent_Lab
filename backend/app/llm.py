@@ -41,12 +41,28 @@ class LLMClient:
             return LLMResult(text, "mock", in_tok, out_tok)
 
         model = AGENT_MODELS.get(role, AGENT_MODELS["experimenter"])
-        msg = self._client.messages.create(
-            model=model,
-            max_tokens=MAX_OUTPUT_TOKENS,
-            system=system,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        text = "".join(b.text for b in msg.content if b.type == "text")
-        return LLMResult(text, model, msg.usage.input_tokens, msg.usage.output_tokens,
-                         truncated=(msg.stop_reason == "max_tokens"))
+        # the researcher gets Anthropic's server-side web search; the API runs the
+        # search loop and may return stop_reason="pause_turn" to be resumed
+        tools = ([{"type": "web_search_20260209", "name": "web_search"}]
+                 if role == "researcher" else None)
+        messages = [{"role": "user", "content": prompt}]
+        in_tok = out_tok = 0
+        texts: list[str] = []
+        truncated = False
+        for _ in range(6):  # allow server-tool continuation (pause_turn)
+            kwargs = dict(model=model, max_tokens=MAX_OUTPUT_TOKENS,
+                          system=system, messages=messages)
+            if tools:
+                kwargs["tools"] = tools
+            msg = self._client.messages.create(**kwargs)
+            in_tok += msg.usage.input_tokens
+            out_tok += msg.usage.output_tokens
+            texts.append("".join(b.text for b in msg.content if b.type == "text"))
+            if msg.stop_reason == "max_tokens":
+                truncated = True
+            if msg.stop_reason == "pause_turn":
+                messages = messages + [{"role": "assistant", "content": msg.content}]
+                continue
+            break
+        text = "\n".join(t for t in texts if t)
+        return LLMResult(text, model, in_tok, out_tok, truncated=truncated)

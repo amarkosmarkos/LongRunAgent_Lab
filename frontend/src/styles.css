@@ -24,6 +24,7 @@
   --agent-experimenter: #d05a2e;
   --agent-critic: #c2417a;
   --agent-supervisor: #5f5e5a;
+  --agent-researcher: #1f7a8c;
   --mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
 }
 
@@ -288,6 +289,7 @@ pre.code {
 .optrow .lab { color: var(--muted); display: inline-flex; align-items: center; gap: 7px; }
 .optrow .lab::before { content: ""; width: 11px; height: 3px; border-radius: 2px; background: currentColor; }
 .optrow .lab.gold { color: var(--gold); }
+.optrow .lab.lkh { color: #a8780f; }
 .optrow .lab.gray { color: #9b968a; }
 .optrow .lab.green { color: var(--green); }
 .optrow .val { font-family: var(--mono); }

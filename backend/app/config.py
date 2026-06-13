@@ -26,6 +26,7 @@ AGENT_MODELS = {
     "experimenter": os.getenv("MODEL_EXPERIMENTER", "claude-sonnet-4-6"),
     "critic": os.getenv("MODEL_CRITIC", "claude-haiku-4-5-20251001"),
     "supervisor": os.getenv("MODEL_SUPERVISOR", "claude-sonnet-4-6"),
+    "researcher": os.getenv("MODEL_RESEARCHER", "claude-sonnet-4-6"),
 }
 
 # Output token ceiling for every agent. The API requires max_tokens, so it can't
@@ -38,13 +39,19 @@ MAX_OUTPUT_TOKENS = 16000
 DEFAULT_RUN_CONFIG = {
     "problem": "tsp",
     "problem_params": {"n_cities": 60, "seed": 42},
+    # fallback initial hypothesis count if the Planner doesn't specify one
     "num_hypotheses": 4,
+    # hard cap on concurrent branches (the Planner decides the actual number,
+    # and may grow it across rounds, but never beyond this)
+    "max_branches": 12,
     "max_rounds": 5,
     "budget_usd": 2.0,
     "experiment_timeout_s": 10,
     # immediate retries when an experiment reply has no code / errors / is invalid,
     # before the round counts as a failure
     "experiment_max_attempts": 3,
+    # run a web-research agent (Anthropic web_search) before planning
+    "enable_web_research": True,
     # high enough that no single basic strategy reaches it -> forces real exploration
     "target_improvement_pct": 18.0,
     "stagnation_rounds": 2,

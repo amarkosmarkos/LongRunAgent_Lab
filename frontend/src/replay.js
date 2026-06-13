@@ -7,6 +7,8 @@ export function emptyState() {
     instance: null,
     baseline: null,
     scope: null,
+    research: null,
+    researchError: null,
     hypotheses: [],
     branches: {}, // id -> {…public, lane, parent_ids, status, best_score, …}
     branchOrder: [],
@@ -51,6 +53,15 @@ function apply(s, ev) {
         agent: ev.agent, branch_id: ev.branch_id,
         action: p.action, round: p.round, seq: ev.seq,
       };
+      break;
+    case "research.findings":
+      s.research = p.findings || null;
+      s.researchError = p.error || null;
+      delete s.activity["@researcher"];
+      break;
+    case "planner.review":
+      s.decisions.push({ ...p, seq: ev.seq, planner: true });
+      delete s.activity["@planner"];
       break;
     case "scope.defined":
       s.scope = p.scope;

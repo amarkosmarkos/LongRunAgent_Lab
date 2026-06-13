@@ -106,7 +106,7 @@ export function StoryPanel({ events, state, selectedSeq, onSelect }) {
 
 // ---------------------------------------------------------------- Scope
 export function ScopePanel({ state }) {
-  const { scope, problem, baseline, config } = state;
+  const { scope, problem, baseline, config, research } = state;
   if (!scope) return <div className="empty">Scope not defined yet.</div>;
   return (
     <div>
@@ -115,6 +115,12 @@ export function ScopePanel({ state }) {
         <div>{problem?.description}</div>
         <div className="sub" style={{ marginTop: 4 }}>{problem?.stats}</div>
       </div>
+      {research && (
+        <div className="panelcard">
+          <h4><AgentBadge name="researcher" small /> Web research (state of the art)</h4>
+          <pre className="code prompt" style={{ maxHeight: 220 }}>{research}</pre>
+        </div>
+      )}
       <div className="panelcard">
         <h4>Objective</h4>
         <div>{scope.objective}</div>
@@ -258,12 +264,13 @@ function HoldoutReport({ holdout }) {
           mean gap {fmtScore(s.mean_baseline_gap)}% → {fmtScore(s.mean_winner_gap)}% ·
           {" "}{s.improved} improved · {s.worsened} worsened
           {s.failed ? ` · ${s.failed} failed` : ""}
+          {s.mean_lkh_gap != null ? ` · LKH (SOTA) ${fmtScore(s.mean_lkh_gap)}%` : ""}
         </span>
       </div>
       <table className="htable">
         <thead>
           <tr><th>instance</th><th>cities</th><th>optimum</th>
-            <th>baseline gap</th><th>winner gap</th><th>outcome</th></tr>
+            <th>baseline gap</th><th>LKH gap</th><th>winner gap</th><th>outcome</th></tr>
         </thead>
         <tbody>
           {(holdout.instances || []).map((r) => (
@@ -272,6 +279,7 @@ function HoldoutReport({ holdout }) {
               <td>{r.n_cities}</td>
               <td>{r.optimum}</td>
               <td>{fmtScore(r.baseline_gap)}%</td>
+              <td style={{ color: "#a8780f" }}>{r.lkh_gap != null ? `${fmtScore(r.lkh_gap)}%` : "—"}</td>
               <td>{r.winner_gap != null ? `${fmtScore(r.winner_gap)}%` : (r.error || "—")}</td>
               <td style={{
                 color: r.outcome === "improved" ? "var(--green)" :

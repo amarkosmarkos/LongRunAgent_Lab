@@ -5,6 +5,8 @@ import { fmtScore } from "./format.js";
 // available in the raw Events tab.
 
 const DEFAULT_AGENT = {
+  "research.findings": "researcher",
+  "planner.review": "planner",
   "scope.defined": "planner",
   "hypotheses.proposed": "strategist",
   "experiment.completed": "experimenter",
@@ -32,12 +34,27 @@ export function narrate(ev, state) {
           `budget $${c.budget_usd}. Baseline (${p.baseline?.algorithm}): ${fmtScore(p.baseline?.score)}.`,
       };
     }
+    case "research.findings":
+      return p.findings
+        ? { agent, text: `Searched the web for state-of-the-art approaches and shared the findings with the lab.` }
+        : { agent, text: `Web research unavailable${p.error ? ` (${p.error})` : ""}; proceeding without it.` };
     case "scope.defined":
       return {
         agent,
         text: `Set the objective: ${p.scope?.objective} ` +
-          `Target: at least ${p.scope?.success_criteria?.target_improvement_pct}% over baseline.`,
+          `Target: at least ${p.scope?.success_criteria?.target_improvement_pct}% over baseline` +
+          `${p.scope?.initial_hypotheses ? `, with ${p.scope.initial_hypotheses} hypotheses to explore` : ""}.`,
       };
+    case "planner.review": {
+      const n = (p.new_branch_ids || []).length;
+      if (!p.continue) return { agent, text: `Reviewed the round and concluded the run. ${p.reasoning || ""}` };
+      return {
+        agent,
+        text: n > 0
+          ? `Reviewed the round's results and opened ${n} new hypothes${n === 1 ? "is" : "es"} to explore next. ${p.reasoning || ""}`
+          : `Reviewed the round's results — no new directions warranted. ${p.reasoning || ""}`,
+      };
+    }
     case "hypotheses.proposed":
       return {
         agent,
@@ -51,6 +68,8 @@ export function narrate(ev, state) {
           text: `Merged ${b.parent_ids.map(bname).join(" + ")} into "${b.name}"` +
             `${p.merge_reason ? ` — ${p.merge_reason}` : "."}`,
         };
+      if (p.planner_round)
+        return { agent: "planner", text: `Designed a new hypothesis from round ${p.planner_round}'s evidence: "${b.name}" — ${b.hypothesis}` };
       return { agent: "strategist", text: `Opened branch "${b.name}" — ${b.hypothesis}` };
     }
     case "experiment.retry":

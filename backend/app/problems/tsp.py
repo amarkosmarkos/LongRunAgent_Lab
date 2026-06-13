@@ -9,10 +9,22 @@ from __future__ import annotations
 
 import math
 import random
+from functools import lru_cache
 
 from .base import Problem
-from .tsplib import (available_instances, gap_pct, load_instance, nn_2opt_tour,
-                     tour_length_euc2d)
+from .tsplib import (available_instances, gap_pct, lkh_tour, load_instance,
+                     nn_2opt_tour, tour_length_euc2d)
+
+
+@lru_cache(maxsize=None)
+def lkh_ref(name: str) -> dict:
+    """Cached LKH (state-of-the-art) reference for a named TSPLIB instance:
+    its near-optimal tour, length and gap. Cached across runs in-process."""
+    inst = load_instance(name)
+    tour = lkh_tour(inst["cities"])
+    length = tour_length_euc2d(inst["cities"], tour)
+    return {"tour": tour, "length": length,
+            "gap_pct": gap_pct(length, inst["optimum"])}
 
 
 def tour_length(cities: list[list[float]], tour: list[int]) -> float:
@@ -86,8 +98,10 @@ class TSP(Problem):
         )
 
 
-DEFAULT_DEV = ["berlin52", "st70", "eil76", "kroA100", "rd100"]
-DEFAULT_HOLDOUT = ["eil51", "pr76", "rat99", "kroB100", "eil101", "lin105"]
+# Harder default sets: mid/large instances where a heuristic written in ~10s
+# does NOT trivially reach the optimum, so the gap is informative.
+DEFAULT_DEV = ["kroA100", "kroA200", "a280", "lin318", "rd400"]
+DEFAULT_HOLDOUT = ["pr299", "pr439", "pcb442", "u574", "rat575"]
 
 
 class TSPBenchmark(Problem):
@@ -108,8 +122,11 @@ class TSPBenchmark(Problem):
         if overlap:
             raise ValueError(f"instances in both dev and holdout: {sorted(overlap)}")
         instances = {n: load_instance(n) for n in [*dev, *holdout]}
+        # state-of-the-art reference (LKH) per dev instance, for the tour map
+        # and the "how close to SOTA are the agents" comparison
+        lkh = {n: lkh_ref(n) for n in dev}
         return {"benchmark": True, "dev": list(dev), "holdout": list(holdout),
-                "instances": instances}
+                "instances": instances, "lkh": lkh}
 
     def _dev_items(self, instance: dict):
         return [(n, instance["instances"][n]) for n in instance["dev"]]
@@ -160,7 +177,8 @@ class TSPBenchmark(Problem):
             "`cities` is a list of [x, y] coordinates. Return a tour: a "
             "permutation of all city indices 0..N-1 (closed tour implied). "
             "Your solve() is executed SEPARATELY on each benchmark instance "
-            "(50-100 cities each). The code must be COMPLETE and self-contained "
+            "(100-575 cities each — large enough that reaching the optimum in the "
+            "time budget is hard). The code must be COMPLETE and self-contained "
             "(define every helper; no placeholders) and TIME-BOUNDED: capture "
             "t0=time.time() and keep improvement loops inside "
             "`while time.time()-t0 < budget`, returning the best tour found so far "
@@ -169,9 +187,11 @@ class TSPBenchmark(Problem):
             "nearest integer (TSPLIB EUC_2D), and your tour competes against the "
             "known optimum. The baseline is already nearest-neighbor + 2-opt, so go "
             "beyond plain 2-opt (Or-opt moves, candidate lists, don't-look bits, "
-            "perturbation/restarts within the time budget). Generalize: the final "
-            "solver is re-tested on hidden instances. No imports beyond the standard "
-            "library; no I/O; no threads."
+            "perturbation/restarts within the time budget). For reference, the "
+            "state-of-the-art solver (LKH) reaches ~0% gap on these; aim as close "
+            "to that as the time budget allows. Generalize: the final solver is "
+            "re-tested on hidden instances. No imports beyond the standard library; "
+            "no I/O; no threads."
         )
 
     # ---------------------------------------------------------- execution
@@ -189,6 +209,7 @@ class TSPBenchmark(Problem):
             length = tour_length_euc2d(inst["cities"], out["solution"])
             detail[name] = {"length": length, "optimum": inst["optimum"],
                             "gap_pct": gap_pct(length, inst["optimum"]),
+                            "lkh_gap": instance.get("lkh", {}).get(name, {}).get("gap_pct"),
                             "time_s": out["exec_time"]}
         return {"solution": solutions, "error": None,
                 "exec_time": round(total, 3), "detail": detail}
@@ -210,9 +231,11 @@ class TSPBenchmark(Problem):
             b_time = round(_time.time() - t0, 3)
             b_gap = gap_pct(tour_length_euc2d(inst["cities"], b_tour),
                             inst["optimum"])
+            lk = lkh_ref(name)
             row = {"name": name, "n_cities": len(inst["cities"]),
                    "optimum": inst["optimum"],
-                   "baseline_gap": b_gap, "baseline_time": b_time}
+                   "baseline_gap": b_gap, "baseline_time": b_time,
+                   "lkh_gap": lk["gap_pct"]}
             out = run_solver(code, {"cities": inst["cities"]}, timeout_s)
             tour = out["solution"]
             n = len(inst["cities"])
@@ -237,11 +260,13 @@ class TSPBenchmark(Problem):
                             "error": None, "outcome": outcome})
             per_instance.append(row)
         n_scored = len(w_gaps)
+        lkh_gaps = [r["lkh_gap"] for r in per_instance if r.get("lkh_gap") is not None]
         return {
             "instances": per_instance,
             "summary": {
                 "mean_baseline_gap": round(sum(b_gaps) / n_scored, 3) if n_scored else None,
                 "mean_winner_gap": round(sum(w_gaps) / n_scored, 3) if n_scored else None,
+                "mean_lkh_gap": round(sum(lkh_gaps) / len(lkh_gaps), 3) if lkh_gaps else None,
                 "improved": improved, "worsened": worsened,
                 "unchanged": unchanged, "failed": failed,
                 "generalizes": failed == 0 and n_scored > 0 and

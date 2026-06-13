@@ -54,27 +54,95 @@ def parse_code(text: str) -> str | None:
 # ---------------------------------------------------------------- planner
 PLANNER_SYSTEM = (
     "You are the Planner of an autonomous research lab. You define the scope of an "
-    "optimization run: objective, baseline, success criteria, constraints, stop "
-    "conditions. Be precise and realistic. Respond with a single JSON object only."
+    "optimization run (objective, success criteria, constraints, stop conditions) "
+    "AND you decide how many parallel hypotheses to explore — that number is YOUR "
+    "call, scaled to the difficulty of the problem, not a fixed value. Be precise "
+    "and realistic. Respond with a single JSON object only."
 )
 
 
 def planner_prompt(problem_desc: str, stats: str, baseline_alg: str,
-                   baseline_score: float, config: dict) -> str:
-    return f"""Define the scope for this optimization run.
+                   baseline_score: float, config: dict,
+                   research: str | None = None) -> str:
+    parts = [f"""Define the scope for this optimization run.
 
 PROBLEM: {problem_desc}
 INSTANCE: {stats}
 BASELINE: {baseline_alg} scored {baseline_score} (lower is better).
-HARD LIMITS set by the operator: max {config['max_rounds']} rounds, budget ${config['budget_usd']} USD, {config['experiment_timeout_s']}s per experiment, suggested target improvement {config['target_improvement_pct']}%.
-
-Return JSON:
-{{
+HARD LIMITS set by the operator: max {config['max_rounds']} rounds, budget ${config['budget_usd']} USD, {config['experiment_timeout_s']}s per experiment, at most {config.get('max_branches', 12)} concurrent hypotheses."""]
+    if research:
+        parts.append(f"WEB RESEARCH (state-of-the-art approaches found online):\n{research}")
+    parts.append("""Return JSON:
+{
   "objective": "...one sentence...",
-  "success_criteria": {{"target_improvement_pct": <number>, "rationale": "..."}},
+  "success_criteria": {"target_improvement_pct": <number>, "rationale": "..."},
+  "initial_hypotheses": <integer: how many DISTINCT strategies to explore in parallel this run — your decision, scaled to difficulty, within the concurrent cap>,
   "constraints": ["..."],
   "stop_conditions": ["..."],
-  "reasoning": "...why these targets are appropriate for this instance size..."
+  "reasoning": "...why these targets AND this number of hypotheses fit this instance..."
+}""")
+    return "\n\n".join(parts)
+
+
+# --------------------------------------------------------------- researcher
+RESEARCHER_SYSTEM = (
+    "You are the Research agent of an autonomous optimization lab. You search the "
+    "web for the current state-of-the-art and best practical approaches for the "
+    "given problem, and summarize concrete, implementable techniques (algorithm "
+    "families, known strong heuristics, typical optimality gaps, pitfalls). Cite "
+    "what you find. Be concise and practical — this feeds the Planner and "
+    "Strategist. Plain text, no code."
+)
+
+
+def researcher_prompt(problem_desc: str, stats: str) -> str:
+    return f"""Research the best-known practical approaches for this problem.
+
+PROBLEM: {problem_desc}
+INSTANCE: {stats}
+
+Search the web and report, in a few short bullet points:
+- The strongest practical algorithm families for this size/type of instance.
+- Typical optimality gaps each achieves within a few seconds.
+- Concrete implementation tips and common pitfalls.
+Keep it actionable — the lab will turn this into testable hypotheses."""
+
+
+# --------------------------------------------------------- planner review
+PLANNER_REVIEW_SYSTEM = (
+    "You are the Planner of an autonomous research lab, reviewing progress at the "
+    "end of a round. You look at every branch's results and the shared insights, "
+    "then DESIGN NEW hypotheses to explore next (new directions the evidence now "
+    "suggests) and decide whether the run should continue. You are not limited to "
+    "a fixed number of branches — add as many promising new directions as the "
+    "evidence justifies, within the cap. Respond with a single JSON object only."
+)
+
+
+def planner_review_prompt(round_: int, max_rounds: int, branches: list[dict],
+                          insights: list[dict], baseline_score: float,
+                          best_score: float | None, target_pct: float,
+                          budget_spent: float, budget_usd: float,
+                          active_count: int, max_branches: int) -> str:
+    return f"""End of round {round_}/{max_rounds}. Review the lab and plan next steps.
+
+BASELINE: {baseline_score} (lower is better). BEST SO FAR: {best_score}. TARGET: {target_pct}% improvement.
+BUDGET: ${budget_spent:.4f} of ${budget_usd}. ACTIVE BRANCHES: {active_count} (hard cap {max_branches}).
+BRANCHES (with results): {json.dumps(branches)}
+SHARED INSIGHTS: {json.dumps(insights)}
+
+Based on the EVIDENCE so far, design new hypotheses worth trying next — genuinely
+new directions (not restating existing branches). Add none if nothing new is
+justified. Do not exceed the active-branch cap.
+Return JSON:
+{{
+  "new_hypotheses": [
+    {{"name": "<short name>", "strategy": "<algorithm family>",
+      "hypothesis": "<falsifiable claim grounded in the evidence above>",
+      "risk": "<main reason this could fail>"}}
+  ],
+  "continue": <true|false: should the run keep going?>,
+  "reasoning": "<what the round showed and why these new directions>"
 }}"""
 
 
@@ -86,22 +154,25 @@ STRATEGIST_SYSTEM = (
 )
 
 
-def strategist_prompt(problem_desc: str, stats: str, scope: dict, k: int) -> str:
-    return f"""Propose {k} distinct strategies to beat the baseline.
+def strategist_prompt(problem_desc: str, stats: str, scope: dict, k: int,
+                      research: str | None = None) -> str:
+    parts = [f"""Propose {k} distinct strategies to beat the baseline.
 
 PROBLEM: {problem_desc}
 INSTANCE: {stats}
-SCOPE: {json.dumps(scope)}
-
-Each strategy must be implementable in pure Python within the time limit.
+SCOPE: {json.dumps(scope)}"""]
+    if research:
+        parts.append(f"WEB RESEARCH (use these state-of-the-art ideas):\n{research}")
+    parts.append("""Each strategy must be implementable in pure Python within the time limit.
 Return JSON:
-{{
+{
   "hypotheses": [
-    {{"name": "<short name>", "strategy": "<algorithm family>",
+    {"name": "<short name>", "strategy": "<algorithm family>",
       "hypothesis": "<falsifiable claim: doing X will improve over baseline because Y>",
-      "risk": "<main reason this could fail>"}}
+      "risk": "<main reason this could fail>"}
   ]
-}}"""
+}""")
+    return "\n\n".join(parts)
 
 
 # ----------------------------------------------------------- experimenter

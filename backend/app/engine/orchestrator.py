@@ -5,7 +5,9 @@ Every decision, experiment, insight and dollar is emitted as an event.
 """
 from __future__ import annotations
 
+import threading
 import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from ..llm import LLMClient
 from ..models import Branch, Insight
@@ -33,7 +35,9 @@ class Orchestrator:
         self.cost_by_agent: dict[str, float] = {}
         self.baseline_solution: list = []
         self.baseline_score: float = 0.0
+        self.research: str | None = None
         self.round = 0
+        self._lock = threading.Lock()  # guards cost + insights across parallel branches
 
     # ------------------------------------------------------------- helpers
     def _check_interrupts(self):
@@ -49,6 +53,7 @@ class Orchestrator:
         "experimenter": "writing solver code",
         "critic": "analysing the result",
         "supervisor": "reviewing branches and deciding what to keep",
+        "researcher": "searching the web for state-of-the-art approaches",
     }
 
     def _call(self, role: str, system: str, prompt: str,
@@ -62,10 +67,11 @@ class Orchestrator:
             "round": self.round or None,
         })
         res = self.llm.call(role, system, prompt, context)
-        self.total_cost += res.cost_usd
-        self.cost_by_agent[role] = self.cost_by_agent.get(role, 0.0) + res.cost_usd
-        if branch_id and branch_id in self.branches:
-            self.branches[branch_id].cost_usd += res.cost_usd
+        with self._lock:  # branches run in parallel — cost mutation must be atomic
+            self.total_cost += res.cost_usd
+            self.cost_by_agent[role] = self.cost_by_agent.get(role, 0.0) + res.cost_usd
+            if branch_id and branch_id in self.branches:
+                self.branches[branch_id].cost_usd += res.cost_usd
         self.run.emit("llm.called", agent=role, branch_id=branch_id, payload={
             "model": res.model, "input_tokens": res.input_tokens,
             "output_tokens": res.output_tokens, "cost_usd": round(res.cost_usd, 6),
@@ -138,6 +144,8 @@ class Orchestrator:
     def execute(self):
         try:
             self.run.set_status("scoping")
+            self._setup()
+            self._research_phase()
             self._scope_phase()
             self.run.set_status("running")
             self._hypothesis_phase()
@@ -154,9 +162,10 @@ class Orchestrator:
             self.run.emit("run.failed", payload={"error": f"{type(e).__name__}: {e}"})
             self.run.set_status("failed")
 
-    def _scope_phase(self):
+    def _setup(self):
         self.baseline_solution, self.baseline_score, baseline_alg = \
             self.problem.baseline(self.instance)
+        self.baseline_alg = baseline_alg
         self.run.emit("run.created", payload={
             "config": self.cfg,
             "problem": {"name": self.problem.name,
@@ -166,26 +175,56 @@ class Orchestrator:
             "baseline": {"solution": self.baseline_solution,
                          "score": self.baseline_score, "algorithm": baseline_alg},
         })
+
+    def _research_phase(self):
+        """Optional: a web-research agent surveys the state of the art and feeds
+        the Planner and Strategist. Degrades gracefully if web search is off or
+        unavailable."""
+        if not self.cfg.get("enable_web_research", True):
+            return
+        try:
+            res = self._call(
+                "researcher", agents.RESEARCHER_SYSTEM,
+                agents.researcher_prompt(self.problem.description,
+                                         self.problem.instance_stats(self.instance)))
+            self.research = (res.text or "").strip() or None
+            self.run.emit("research.findings", agent="researcher",
+                          payload={"findings": self.research})
+        except Exception as e:
+            self.research = None
+            self.run.emit("research.findings", agent="researcher",
+                          payload={"findings": None,
+                                   "error": f"{type(e).__name__}: {e}"})
+
+    def _scope_phase(self):
         res = self._call(
             "planner", agents.PLANNER_SYSTEM,
             agents.planner_prompt(self.problem.description,
                                   self.problem.instance_stats(self.instance),
-                                  baseline_alg, self.baseline_score, self.cfg),
+                                  self.baseline_alg, self.baseline_score, self.cfg,
+                                  research=self.research),
             context={"config": self.cfg, "baseline_score": self.baseline_score})
         self.scope = agents.parse_json(res.text)
         self.run.emit("scope.defined", agent="planner", payload={"scope": self.scope})
 
     def _hypothesis_phase(self):
+        # the Planner decides the count; config value is only a fallback / cap
+        k = self.scope.get("initial_hypotheses") or self.cfg["num_hypotheses"]
+        try:
+            k = int(k)
+        except (TypeError, ValueError):
+            k = self.cfg["num_hypotheses"]
+        k = max(1, min(k, self.cfg["max_branches"]))
         res = self._call(
             "strategist", agents.STRATEGIST_SYSTEM,
             agents.strategist_prompt(self.problem.description,
                                      self.problem.instance_stats(self.instance),
-                                     self.scope, self.cfg["num_hypotheses"]),
-            context={"k": self.cfg["num_hypotheses"]})
+                                     self.scope, k, research=self.research),
+            context={"k": k})
         hyps = agents.parse_json(res.text).get("hypotheses", [])
         self.run.emit("hypotheses.proposed", agent="strategist",
                       payload={"hypotheses": hyps})
-        for h in hyps[: self.cfg["num_hypotheses"]]:
+        for h in hyps[:k]:
             self._create_branch(h.get("name", "unnamed"), h.get("hypothesis", ""),
                                 h.get("strategy", "unknown"), [],
                                 extra={"risk": h.get("risk")})
@@ -202,18 +241,83 @@ class Orchestrator:
     def _iterate(self) -> str:
         for rnd in range(1, self.cfg["max_rounds"] + 1):
             self.round = rnd
-            if not self._active():
+            active = self._active()
+            if not active:
                 return "all branches closed"
-            for b in list(self._active()):
-                self._experiment(b, rnd)
+            self._run_round(active, rnd)           # experiments IN PARALLEL (barrier)
             _, best = self._best_overall()
             target = self.scope.get("success_criteria", {}).get(
                 "target_improvement_pct", self.cfg["target_improvement_pct"])
             imp = self._improvement_pct(best)
-            self._supervise(rnd)
+            self._supervise(rnd)                   # prune: collapse / merge
             if imp is not None and imp >= target:
                 return f"target improvement reached ({imp}% >= {target}%)"
+            # the Planner reviews the round's output and designs NEW hypotheses
+            if not self._planner_review(rnd, best, target):
+                return "planner concluded the run"
         return "max rounds completed"
+
+    def _run_round(self, active: list[Branch], rnd: int):
+        """Experiment every active branch concurrently, then wait for all (a
+        barrier) before the round's review — exactly the parallel-then-sync model."""
+        workers = min(len(active), 8)
+        stop = None
+        with ThreadPoolExecutor(max_workers=workers) as ex:
+            futs = {ex.submit(self._experiment, b, rnd): b for b in active}
+            for f in as_completed(futs):
+                try:
+                    f.result()
+                except StopRun as e:
+                    stop = stop or e
+                except Exception as e:  # one branch crashing must not kill the run
+                    b = futs[f]
+                    self.run.emit("experiment.completed", agent="experimenter",
+                                  branch_id=b.id, payload={
+                                      "round": rnd, "valid": False, "score": None,
+                                      "error": f"engine error: {type(e).__name__}: {e}",
+                                      "exec_time": 0.0, "improved": False,
+                                      "beats_baseline": False, "code": None,
+                                      "baseline_score": self.baseline_score,
+                                      "branch_best_score": b.best_score,
+                                      "improvement_pct": None, "detail": None,
+                                      "retries": 0})
+        if stop:
+            raise stop
+
+    def _planner_review(self, rnd: int, best: float | None, target: float) -> bool:
+        """The Planner sees every branch's output + insights and may spawn new
+        hypotheses (new directions) — the branch count is not fixed. Returns
+        whether the run should continue."""
+        publics = [{**b.public(),
+                    "rounds_without_improvement": b.rounds_without_improvement,
+                    "failures_in_a_row": b.failures_in_a_row,
+                    "last_error": b.last_error}
+                   for b in self.branches.values()]
+        res = self._call(
+            "planner", agents.PLANNER_REVIEW_SYSTEM,
+            agents.planner_review_prompt(
+                rnd, self.cfg["max_rounds"], publics,
+                [i.public() for i in self.insights], self.baseline_score, best,
+                target, self.total_cost, self.cfg["budget_usd"],
+                len(self._active()), self.cfg["max_branches"]),
+            context={"review": True, "round": rnd},
+            action="reviewing results and designing new hypotheses")
+        try:
+            dec = agents.parse_json(res.text)
+        except Exception:
+            dec = {"new_hypotheses": [], "continue": True, "reasoning": res.text[:300]}
+        room = max(0, self.cfg["max_branches"] - len(self._active()))
+        spawned = []
+        for h in (dec.get("new_hypotheses") or [])[:room]:
+            b = self._create_branch(h.get("name", "unnamed"), h.get("hypothesis", ""),
+                                     h.get("strategy", "unknown"), [],
+                                     extra={"risk": h.get("risk"), "planner_round": rnd})
+            spawned.append(b.id)
+        self.run.emit("planner.review", agent="planner", payload={
+            "round": rnd, "reasoning": dec.get("reasoning"),
+            "new_branch_ids": spawned,
+            "continue": bool(dec.get("continue", True))})
+        return bool(dec.get("continue", True))
 
     def _experiment(self, b: Branch, rnd: int):
         self._check_interrupts()
@@ -326,12 +430,14 @@ class Orchestrator:
         b._last_critique = crit.get("analysis")
 
         ins_text = crit.get("insight")
-        if ins_text and not any(i.text == ins_text for i in self.insights):
-            ins = Insight(id="k-" + uuid.uuid4().hex[:6], branch_id=b.id,
-                          round=rnd, text=ins_text)
-            self.insights.append(ins)
-            self.run.emit("insight.added", agent="critic", branch_id=b.id,
-                          payload={"insight": ins.public()})
+        if ins_text:
+            with self._lock:  # shared knowledge pool — parallel branches append here
+                if not any(i.text == ins_text for i in self.insights):
+                    ins = Insight(id="k-" + uuid.uuid4().hex[:6], branch_id=b.id,
+                                  round=rnd, text=ins_text)
+                    self.insights.append(ins)
+                    self.run.emit("insight.added", agent="critic", branch_id=b.id,
+                                  payload={"insight": ins.public()})
 
     def _supervise(self, rnd: int):
         publics = [{**b.public(),
