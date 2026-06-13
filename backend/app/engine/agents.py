@@ -8,7 +8,8 @@ from __future__ import annotations
 import json
 import re
 
-CODE_RE = re.compile(r"```python\s*(.*?)```", re.DOTALL)
+CODE_RE = re.compile(r"```[ \t]*[Pp]ython[ \t]*\n?(.*?)```", re.DOTALL)
+GENERIC_FENCE_RE = re.compile(r"```[ \t]*\n(.*?)```", re.DOTALL)
 
 
 def parse_json(text: str) -> dict:
@@ -40,7 +41,14 @@ def parse_json(text: str) -> dict:
 
 def parse_code(text: str) -> str | None:
     m = CODE_RE.search(text)
-    return m.group(1).strip() if m else None
+    if m:
+        return m.group(1).strip()
+    # fallback: a plain ``` fence whose body is clearly the solver (the model
+    # forgot the `python` language tag) — better than rejecting valid code
+    for body in GENERIC_FENCE_RE.findall(text):
+        if "def solve" in body:
+            return body.strip()
+    return None
 
 
 # ---------------------------------------------------------------- planner
@@ -108,7 +116,13 @@ EXPERIMENTER_SYSTEM = (
     "defining `def solve(cities): ...` and returning a tour (a list of int).\n"
     "Do not add prose before, between, or after these two parts. Do not use any "
     "other code fence. If you omit the ```python block the experiment is a total "
-    "failure, so never describe code in words — always emit the runnable block."
+    "failure, so never describe code in words — always emit the runnable block.\n"
+    "The code MUST be complete and self-contained: define every function and name "
+    "you use, no '...' placeholders, no TODOs, no references to earlier messages. "
+    "It MUST be time-bounded: capture t0 = time.time() at the start of solve() and "
+    "stop improving once the time budget is reached, returning the best tour found "
+    "so far — a solver that can exceed the time limit is a failed solver. "
+    "Keep it compact enough to fit well within the output limit (trim comments)."
 )
 
 
@@ -138,13 +152,21 @@ INSTANCE: {stats}"""]
         # tell the model exactly what broke so it can fix it immediately
         parts.append("YOUR PREVIOUS ATTEMPT THIS ROUND FAILED — fix it now.\n"
                      f"{retry_feedback}")
-    parts.append("""Reply with exactly these two parts and nothing else:
-{"approach": "<one sentence: what you changed and why>", "expectation": "<expected effect>"}
+    budget = max(1, time_limit_s - 1)
+    parts.append(f"""Reply with exactly these two parts and nothing else. The code must be
+COMPLETE (define everything, no placeholders) and TIME-BOUNDED (stop before {budget}s):
+{{"approach": "<one sentence: what you changed and why>", "expectation": "<expected effect>"}}
 ```python
-# complete, runnable solver
+import time
+
 def solve(cities):
-    ...
-    return tour  # list[int], a permutation of range(len(cities))
+    t0 = time.time()
+    budget = {budget}            # seconds — must return before the {time_limit_s}s hard limit
+    n = len(cities)
+    best = list(range(n))        # replace with a real construction + improvement loop
+    while time.time() - t0 < budget:
+        ...                      # improve `best`; break/return when time runs out
+    return best                  # a permutation of range(n)
 ```""")
     return "\n\n".join(parts)
 

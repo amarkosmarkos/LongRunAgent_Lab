@@ -1,15 +1,18 @@
 """LLM client: real Anthropic API or deterministic mock. Tracks cost per call."""
 from __future__ import annotations
 
-from .config import AGENT_MODELS, ANTHROPIC_API_KEY, LLM_MOCK, MODEL_PRICING
+from .config import (AGENT_MAX_TOKENS, AGENT_MODELS, ANTHROPIC_API_KEY, LLM_MOCK,
+                     MODEL_PRICING)
 
 
 class LLMResult:
-    def __init__(self, text: str, model: str, input_tokens: int, output_tokens: int):
+    def __init__(self, text: str, model: str, input_tokens: int, output_tokens: int,
+                 truncated: bool = False):
         self.text = text
         self.model = model
         self.input_tokens = input_tokens
         self.output_tokens = output_tokens
+        self.truncated = truncated  # response hit the output token cap (cut off)
         in_price, out_price = MODEL_PRICING.get(model, MODEL_PRICING["mock"])
         self.cost_usd = (input_tokens * in_price + output_tokens * out_price) / 1_000_000
 
@@ -40,9 +43,10 @@ class LLMClient:
         model = AGENT_MODELS.get(role, AGENT_MODELS["experimenter"])
         msg = self._client.messages.create(
             model=model,
-            max_tokens=4000,
+            max_tokens=AGENT_MAX_TOKENS.get(role, 4000),
             system=system,
             messages=[{"role": "user", "content": prompt}],
         )
         text = "".join(b.text for b in msg.content if b.type == "text")
-        return LLMResult(text, model, msg.usage.input_tokens, msg.usage.output_tokens)
+        return LLMResult(text, model, msg.usage.input_tokens, msg.usage.output_tokens,
+                         truncated=(msg.stop_reason == "max_tokens"))

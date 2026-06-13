@@ -116,11 +116,21 @@ class Orchestrator:
                  "exec_time": out["exec_time"], "solution": out["solution"]}, detail)
 
     @staticmethod
-    def _retry_feedback(code: str | None, result: dict) -> str:
+    def _retry_feedback(code: str | None, result: dict, truncated: bool = False) -> str:
+        if truncated:
+            return ("Your previous reply was CUT OFF at the output token limit before "
+                    "the ```python block closed, so the code was incomplete. Write a "
+                    "SHORTER, fully self-contained solver: trim comments and dead code, "
+                    "and make sure the closing ``` is reached.")
         if not code:
             return ("Your reply contained no ```python code block, so nothing ran. "
                     "Emit the one-line JSON followed by exactly one ```python fence "
                     "that defines solve(cities) and returns a tour.")
+        if "timeout" in (result.get("error") or ""):
+            return (f"The solver was too slow: {result['error']}. Make solve() "
+                    "time-bounded — record t0 = time.time() at the start and stop "
+                    "improving once time.time() - t0 exceeds the budget, returning "
+                    "the best tour found so far. Never run an unbounded loop.")
         return (f"The solver you returned failed: {result['error']}. "
                 "Return a corrected, complete solver in one ```python fence.")
 
@@ -247,9 +257,13 @@ class Orchestrator:
                                        "approach": meta.get("approach"),
                                        "expectation": meta.get("expectation")})
             result, detail = self._run_attempt(code)
+            if code is None and getattr(res, "truncated", False):
+                # not "no code" — we cut it off at the token cap; say so honestly
+                result["error"] = "reply truncated at the output token limit (code cut off)"
             if result["valid"] or try_i == max_attempts:
                 break
-            retry_feedback = self._retry_feedback(code, result)
+            retry_feedback = self._retry_feedback(
+                code, result, truncated=getattr(res, "truncated", False))
             self.run.emit("experiment.retry", agent="experimenter", branch_id=b.id,
                           payload={"round": rnd, "attempt": attempt, "retry": try_i,
                                    "max_attempts": max_attempts,

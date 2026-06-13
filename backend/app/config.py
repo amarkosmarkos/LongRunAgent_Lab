@@ -28,6 +28,16 @@ AGENT_MODELS = {
     "supervisor": os.getenv("MODEL_SUPERVISOR", "claude-sonnet-4-6"),
 }
 
+# Output token caps per role. The experimenter writes full solvers, which can be
+# long — too low a cap truncates the code mid-fence and looks like "no code".
+AGENT_MAX_TOKENS = {
+    "planner": 1500,
+    "strategist": 2000,
+    "experimenter": 8000,
+    "critic": 1200,
+    "supervisor": 1500,
+}
+
 DEFAULT_RUN_CONFIG = {
     "problem": "tsp",
     "problem_params": {"n_cities": 60, "seed": 42},
