@@ -8,7 +8,30 @@
       "PowerShell(git commit -m \"Initial commit: Long Run Agent Lab \\(pre UI redesign\\)\")",
       "PowerShell(New-Item -ItemType Directory -Force D:\\\\OneDrive\\\\Documents\\\\Proyectos\\\\LongRunAgent_Lab\\\\backend\\\\data\\\\tsplib | Out-Null; $names = @\\(\"eil51\",\"berlin52\",\"st70\",\"eil76\",\"pr76\",\"rat99\",\"kroA100\",\"kroB100\",\"rd100\",\"eil101\",\"lin105\",\"ch130\",\"ch150\",\"kroA150\",\"rat195\",\"d198\",\"kroA200\"\\); $ok=@\\(\\); $fail=@\\(\\); foreach \\($n in $names\\) { try { Invoke-WebRequest -Uri \"https://raw.githubusercontent.com/mastqe/tsplib/master/$n.tsp\" -OutFile \"D:\\\\OneDrive\\\\Documents\\\\Proyectos\\\\LongRunAgent_Lab\\\\backend\\\\data\\\\tsplib\\\\$n.tsp\" -UseBasicParsing -ErrorAction Stop; $ok += $n } catch { $fail += $n } }; \"ok: $\\($ok -join ', '\\)\"; \"fail: $\\($fail -join ', '\\)\")",
       "PowerShell(Get-PSDrive C, D | Select-Object Name, @{n='FreeGB';e={[math]::Round\\($_.Free/1GB,1\\)}}; $env:TEMP)",
-      "mcp__Claude_Preview__preview_start"
+      "mcp__Claude_Preview__preview_start",
+      "Bash(python -c \"import json,collections; c=collections.Counter\\(json.loads\\(l\\)['type'] for l in open\\('events.jsonl',encoding='utf-8'\\)\\); [print\\(f'{v:3d}  {k}'\\) for k,v in c.most_common\\(\\)]\")",
+      "Bash(python -c ' *)",
+      "Bash(cd /d/OneDrive/Documents/Proyectos/LongRunAgent_Lab/backend/app/problems && ls -la)",
+      "Bash(cd /d/OneDrive/Documents/Proyectos/LongRunAgent_Lab/frontend/src && find . -name '*.jsx' -o -name '*.js' | sort)",
+      "Bash(npm run *)",
+      "Bash(LLM_MOCK=1 python -c ' *)",
+      "Bash(curl -s -X POST http://127.0.0.1:8000/api/runs -H \"Content-Type: application/json\" -d '{\"problem\":\"tsp\",\"problem_params\":{\"n_cities\":280,\"seed\":11},\"num_hypotheses\":3,\"max_rounds\":3,\"budget_usd\":2.0}')",
+      "Bash(python -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\('RUN_ID', d['id'], 'status', d['status']\\)\")",
+      "Bash(curl -s http://127.0.0.1:8011/api/health)",
+      "Bash(curl -s -X POST http://127.0.0.1:8011/api/runs -H \"Content-Type: application/json\" -d '{\"problem\":\"tsp\",\"problem_params\":{\"n_cities\":600,\"seed\":3},\"num_hypotheses\":4,\"max_rounds\":4,\"budget_usd\":2.0}')",
+      "Bash(python -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(d['id']\\)\")",
+      "Bash(curl -s -X POST http://127.0.0.1:8011/api/runs -H \"Content-Type: application/json\" -d '{\"problem\":\"tsp\",\"problem_params\":{\"n_cities\":1100,\"seed\":5},\"num_hypotheses\":4,\"max_rounds\":5,\"budget_usd\":2.0}')",
+      "Bash(python -c \"import sys,json; print\\(json.load\\(sys.stdin\\)['id']\\)\")",
+      "Bash(curl -s -X POST http://127.0.0.1:8011/api/runs/20260613-121907-bc6462/stop)",
+      "Bash(taskkill //PID 28532 //F)",
+      "Bash(netstat -ano)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Bash(curl -s \"http://127.0.0.1:8011/api/runs\")",
+      "Bash(python -c \"import sys,json; d=json.load\\(sys.stdin\\); [print\\(r['id'], r['status']\\) for r in d[:4]]\")",
+      "Bash(cd /d/OneDrive/Documents/Proyectos/LongRunAgent_Lab/backend/data/runs && ls -dt */ | head -5)",
+      "Skill(claude-api)",
+      "Skill(claude-api:*)"
     ]
   }
 }
