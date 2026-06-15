@@ -1,14 +1,66 @@
 # ⚗ Long Run Agent Lab
 
-A research lab for **long-running autonomous agent experiments on verifiable problems**.
+**A laboratory where autonomous agents do real algorithmic research — over long horizons, under a budget, and against a baseline that cannot be fooled.**
 
-Agents define a scope, propose hypotheses, branch into experiment paths, test ideas
-against an objective baseline, critique failures, share discoveries, collapse weak
-branches, merge complementary ones — and the entire run is observable, replayable,
-cost-tracked, and objectively verified.
+![The branch graph of a complete run](images/agentss_diagram.png)
 
-First problem: **Euclidean TSP** (baseline: nearest-neighbor). The engine is
-problem-agnostic — see `backend/app/problems/base.py` to add another benchmark.
+Give the lab a problem and a budget. A team of agents defines the scope, proposes
+competing hypotheses, and spins each one into its own experiment branch. Every branch
+writes real code, runs it, and is **scored by the engine — never by the agent that wrote
+it**. Weak branches collapse with evidence. Complementary ones merge. Discoveries from
+one branch flow into the prompts of all the others. The run keeps going, round after
+round, until it hits its target or runs out of money — and the whole thing is observable,
+replayable, and independently re-verified at the end.
+
+The first problem is the **Travelling Salesman Problem**, but TSP is just the proving
+ground. The engine is problem-agnostic: anything with a verifiable score and a baseline
+can become the next benchmark. The real artifact is the **research loop** — a system that
+lets agents explore an algorithmic search space autonomously, leave behind a paper trail
+of *why* each idea worked or didn't, and converge on a solution you can trust because the
+lab proved it on instances the agents never saw.
+
+In the run above: 11 branches, a $5 budget, **98.7% improvement over baseline** for
+$1.23 — and the winner verified to generalize on held-out instances.
+
+---
+
+## Why this is interesting
+
+Most "agent" demos are a single model talking to itself. This is different:
+
+- **The agents compete and cooperate.** Branches race in parallel, but a shared
+  knowledge base means a failure in one branch becomes a lesson for all of them.
+- **Nothing is taken on trust.** Solver code runs in a subprocess; the engine validates
+  and scores the result. The winner is re-verified — and then re-tested on a held-out set
+  to expose anything that only worked because it overfit the dev instances.
+- **It's budget-aware and long-running.** Every LLM call is priced in tokens and USD and
+  attributed to an agent and a branch. The run manages its own compute and stops
+  gracefully when the money runs out.
+- **Every decision is auditable.** The entire run is an event stream — live view and
+  replay are the same pure reduction of it. You can scrub back to event 0 and watch the
+  research happen.
+
+---
+
+## A look inside a run
+
+**Every experiment is fully traceable** — the approach tried, the engine-verified result,
+the critic's verdict, and the exact code that produced it:
+
+![Detail of a single experiment](images/detail.png)
+
+**Discoveries compound.** The Critic distills each result into a transferable insight that
+is shared with every branch's Experimenter and used by the Supervisor for merge decisions:
+
+![The shared knowledge base](images/knwoledge.png)
+
+**The result is proven, not claimed.** The winning solver is re-verified independently and
+re-tested on instances the agents never saw during development — a modification only counts
+if it beats the baseline on held-out data:
+
+![Final results and held-out verification](images/results.png)
+
+---
 
 ## Quick start
 
@@ -27,7 +79,7 @@ uvicorn app.main:app --port 8000
   canonical demo arc, but all solver code is *really executed and really scored* —
   results stay objective. Perfect for a free 5-minute demo.
 - **With `ANTHROPIC_API_KEY`** in `backend/.env`: the five agents (Planner, Strategist,
-  Experimenter, Critic, Supervisor) run on real Claude models. Default budget: $2/run.
+  Experimenter, Critic, Supervisor) run on real models. Default budget: $2/run.
 
 ### 2. Frontend
 
@@ -44,7 +96,7 @@ press **▶ Replay** to scrub through the whole run from event 0.
 
 1. **Start a run** — the Planner defines scope: objective, baseline score, target
    improvement, constraints, stop conditions (Scope tab).
-2. **Hypotheses branch** — the Strategist proposes 4 distinct strategies; each becomes
+2. **Hypotheses branch** — the Strategist proposes distinct strategies; each becomes
    a lane in the branch graph.
 3. **Experiments run** — green nodes improved, gray didn't, red failed. Click any node
    to see the approach, the engine-verified result, the critic's verdict, and the exact
@@ -84,7 +136,7 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full design and event s
 Per run (UI or `POST /api/runs`): `n_cities`, `seed`, `num_hypotheses`, `max_rounds`,
 `budget_usd`. Defaults in `backend/app/config.py`, models per agent role in
 `backend/.env` (`MODEL_PLANNER`, `MODEL_EXPERIMENTER`, …). Pricing table in
-`config.py` — keep it in sync with current Anthropic pricing.
+`config.py` — keep it in sync with current pricing.
 
 ## ⚠ Security note
 
