@@ -6,6 +6,16 @@
       "runtimeExecutable": "npm",
       "runtimeArgs": ["run", "dev"],
       "cwd": "frontend",
+      "env": { "VITE_BACKEND_URL": "http://127.0.0.1:8000" },
+      "port": 5173,
+      "autoPort": true
+    },
+    {
+      "name": "demo",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev"],
+      "cwd": "frontend",
+      "env": { "VITE_DEMO": "1" },
       "port": 5173,
       "autoPort": true
     },

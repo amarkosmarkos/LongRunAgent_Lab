@@ -3,7 +3,39 @@ const json = (r) => {
   return r.json();
 };
 
-export const api = {
+// Demo mode: the site is published static (e.g. GitHub Pages) with no backend.
+// Real runs were frozen into public/demo/*.json by app.scripts.export_demo, and
+// we serve those instead of hitting /api. Everything read-only still works —
+// runs list, branch graph, story, replay, originality, lab memory — while the
+// write paths (start/stop) are disabled.
+const DEMO = import.meta.env.VITE_DEMO === "1";
+const DEMO_BASE = `${import.meta.env.BASE_URL}demo`;
+
+const demoRuns = () => fetch(`${DEMO_BASE}/runs.json`).then(json);
+const demoEvents = (id) => fetch(`${DEMO_BASE}/${id}.json`).then(json);
+
+const demoApi = {
+  health: () => Promise.resolve({ ok: true, mock_mode: true, demo: true }),
+  problems: () => Promise.resolve({ problems: [], tsplib: null }),
+  listRuns: () => demoRuns(),
+  createRun: () => Promise.reject(new Error("demo mode: starting runs is disabled")),
+  getRun: (id) =>
+    demoRuns().then((runs) => {
+      const r = runs.find((x) => x.id === id);
+      if (!r) throw new Error(`run ${id} not found`);
+      return r;
+    }),
+  getEvents: (id, since = 0) =>
+    demoEvents(id).then((d) => ({ status: d.status, events: d.events.slice(since) })),
+  stopRun: () => Promise.resolve({ ok: true }),
+  // frozen runs are terminal, so there is nothing to stream — end immediately
+  stream: (id, since, onEvent, onEnd) => {
+    demoEvents(id).then((d) => onEnd?.(d.status)).catch(() => onEnd?.(null));
+    return () => {};
+  },
+};
+
+const liveApi = {
   health: () => fetch("/api/health").then(json),
   problems: () => fetch("/api/problems").then(json),
   listRuns: () => fetch("/api/runs").then(json),
@@ -35,3 +67,6 @@ export const api = {
     return () => es.close();
   },
 };
+
+export const IS_DEMO = DEMO;
+export const api = DEMO ? demoApi : liveApi;

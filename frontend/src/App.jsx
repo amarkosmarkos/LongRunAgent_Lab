@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { api } from "./api.js";
+import { api, IS_DEMO } from "./api.js";
 import RunView from "./RunView.jsx";
 
 const splitNames = (s) =>
@@ -87,7 +87,13 @@ export default function App() {
             {health.mock_mode ? "◌ mock mode (no API key)" : "● live mode · real Claude agents"}
           </span>
         )}
-        {health === null && <span className="chip failed">backend offline</span>}
+        {health === null && !IS_DEMO && <span className="chip failed">backend offline</span>}
+        {IS_DEMO && (
+          <span className="chip llmtag mock"
+            title="Static demo — real frozen runs replayed with no backend. Clone the repo to run live experiments.">
+            ◍ demo · frozen runs (read-only)
+          </span>
+        )}
       </div>
 
       {view.name === "run" ? (
@@ -95,12 +101,17 @@ export default function App() {
       ) : (
         <div className="runlist">
           <div className="newrun">
-            <h2 style={{ margin: "0 0 4px" }}>New experiment run</h2>
+            <h2 style={{ margin: "0 0 4px" }}>
+              {IS_DEMO ? "Explore the frozen runs below" : "New experiment run"}
+            </h2>
             <div className="sub">
-              {isBench
+              {IS_DEMO
+                ? "This is a static demo: real runs are replayed from frozen event logs with no backend. Pick a run below to explore its branch graph, story, replay, originality verdict and cross-run lab memory. To launch live experiments, clone the repo and run the backend."
+                : isBench
                 ? "TSPLIB95 benchmark with known optima — agents must beat a nearest-neighbor + 2-opt baseline; the winner is re-tested on held-out instances."
                 : "Random Euclidean TSP — agents must beat the nearest-neighbor baseline."}
             </div>
+            {!IS_DEMO && (<>
             <div className="fields">
               <label>problem
                 <select value={cfg.problem}
@@ -129,6 +140,7 @@ export default function App() {
             <button className="primary" onClick={startRun} disabled={starting || !health}>
               {starting ? "Starting…" : "▶ Start run"}
             </button>
+            </>)}
           </div>
 
           <h2>Runs</h2>
