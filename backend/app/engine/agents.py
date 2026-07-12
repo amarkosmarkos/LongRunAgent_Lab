@@ -63,7 +63,8 @@ PLANNER_SYSTEM = (
 
 def planner_prompt(problem_desc: str, stats: str, baseline_alg: str,
                    baseline_score: float, config: dict,
-                   research: str | None = None) -> str:
+                   research: str | None = None,
+                   memory: str | None = None) -> str:
     parts = [f"""Define the scope for this optimization run.
 
 PROBLEM: {problem_desc}
@@ -72,6 +73,8 @@ BASELINE: {baseline_alg} scored {baseline_score} (lower is better).
 HARD LIMITS set by the operator: max {config['max_rounds']} rounds, budget ${config['budget_usd']} USD, {config['experiment_timeout_s']}s per experiment, at most {config.get('max_branches', 12)} concurrent hypotheses."""]
     if research:
         parts.append(f"WEB RESEARCH (state-of-the-art approaches found online):\n{research}")
+    if memory:
+        parts.append(memory)
     parts.append("""Return JSON:
 {
   "objective": "...one sentence...",
@@ -171,7 +174,8 @@ STRATEGIST_SYSTEM = (
 
 
 def strategist_prompt(problem_desc: str, stats: str, scope: dict, k: int,
-                      research: str | None = None) -> str:
+                      research: str | None = None,
+                      memory: str | None = None) -> str:
     parts = [f"""Propose {k} distinct strategies to beat the baseline.
 
 PROBLEM: {problem_desc}
@@ -179,6 +183,8 @@ INSTANCE: {stats}
 SCOPE: {json.dumps(scope)}"""]
     if research:
         parts.append(f"WEB RESEARCH (use these state-of-the-art ideas):\n{research}")
+    if memory:
+        parts.append(memory)
     parts.append("""Each strategy must be implementable in pure Python within the time limit.
 Return JSON:
 {

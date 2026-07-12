@@ -298,9 +298,112 @@ function HoldoutReport({ holdout }) {
   );
 }
 
+// ---------------------------------------------------------- Originality
+const QUADRANT_META = {
+  "original+wins": { label: "Original & wins", cls: "good",
+    note: "Novel idea that also beats the target — the knowledge the lab is built to create." },
+  rehash: { label: "Known method (works)", cls: "rehash",
+    note: "Beats the target, but the algorithm already exists in the literature." },
+  "novel-weak": { label: "Novel but weak", cls: "novel",
+    note: "An unusual idea that doesn't beat the target yet." },
+  noise: { label: "Not original", cls: "noise",
+    note: "Neither novel nor strong enough to matter." },
+  "?": { label: "Inconclusive", cls: "noise", note: "" },
+};
+
+// 2x2 novelty (y) x quality (x) map with the run plotted as a dot. Quality is
+// measured against the target: the vertical midline is "hit the target".
+function QuadrantChart({ originality, improvementPct, targetPct }) {
+  const W = 220, H = 170, pad = 26;
+  const x0 = pad, x1 = W - 10, y0 = 10, y1 = H - pad;
+  const ratio = targetPct ? (improvementPct ?? 0) / targetPct : 1;
+  const qx = Math.max(0, Math.min(1, ratio / 2)); // target sits at 0.5
+  const oy = Math.max(0, Math.min(1, (originality ?? 0) / 10));
+  const cx = x0 + qx * (x1 - x0);
+  const cy = y1 - oy * (y1 - y0);
+  const midX = x0 + 0.5 * (x1 - x0);
+  const midY = y0 + 0.5 * (y1 - y0);
+  return (
+    <svg className="quadchart" viewBox={`0 0 ${W} ${H}`} width="100%">
+      {/* the prize cell: novel (top) AND wins (right) */}
+      <rect x={midX} y={y0} width={x1 - midX} height={midY - y0}
+        className="qcell-good" />
+      <line x1={midX} y1={y0} x2={midX} y2={y1} className="qgrid" />
+      <line x1={x0} y1={midY} x2={x1} y2={midY} className="qgrid" />
+      <line x1={x0} y1={y0} x2={x0} y2={y1} className="qaxis" />
+      <line x1={x0} y1={y1} x2={x1} y2={y1} className="qaxis" />
+      <text x={x1} y={y1 + 16} className="qlab" textAnchor="end">quality →</text>
+      <text x={x0 - 6} y={y0 + 6} className="qlab" textAnchor="end"
+        transform={`rotate(-90 ${x0 - 6} ${y0 + 6})`}>originality →</text>
+      <text x={x1 - 3} y={y0 + 11} className="qhint" textAnchor="end">novel + wins</text>
+      <circle cx={cx} cy={cy} r={6} className="qdot" />
+    </svg>
+  );
+}
+
+function OriginalityReport({ originality, results }) {
+  if (!originality) return null;
+  if (originality.error)
+    return (
+      <div className="panelcard">
+        <h4><AgentBadge name="judge" small /> Originality of the winning idea</h4>
+        <div style={{ color: "var(--red)" }}>{originality.error}</div>
+      </div>
+    );
+  const v = originality.verdict || {};
+  const q = QUADRANT_META[originality.quadrant] || QUADRANT_META["?"];
+  const improvementPct = originality.improvement_pct ?? results?.improvement_pct;
+  const targetPct = results?.target_improvement_pct;
+  return (
+    <div className="panelcard originality">
+      <h4><AgentBadge name="judge" small /> Originality of the winning idea</h4>
+      <div className="sub" style={{ marginBottom: 8 }}>
+        A judge with web search read the winning solver, identified its
+        mechanism, and checked whether the idea already exists online — then
+        crossed that with whether it beat the target.
+      </div>
+      <div className="origtop">
+        <div className="origscore">
+          <span className="num">{v.originality ?? "—"}<small>/10</small></span>
+          <span className="lbl">originality</span>
+          <span className={`badge ${q.cls}`} style={{ marginLeft: 0, marginTop: 6 }}>
+            {q.label}
+          </span>
+          <span className={`online ${v.exists_online ? "yes" : "no"}`}>
+            {v.exists_online ? "● already online" : "○ no public precedent"}
+          </span>
+        </div>
+        <QuadrantChart originality={v.originality}
+          improvementPct={improvementPct} targetPct={targetPct} />
+      </div>
+      {q.note && <div className="sub" style={{ marginTop: 2 }}>{q.note}</div>}
+      <div className="kv" style={{ marginTop: 8 }}>
+        {v.mechanism && (<><span className="k">mechanism</span>
+          <span className="v">{v.mechanism}</span></>)}
+        {v.nearest_known_technique && (<><span className="k">closest known</span>
+          <span className="v">{v.nearest_known_technique}</span></>)}
+      </div>
+      {v.justification && (
+        <div className="sub" style={{ marginTop: 8 }}>{v.justification}</div>)}
+      {v.source_url && (
+        <div style={{ marginTop: 6 }}>
+          <a className="link" href={v.source_url} target="_blank" rel="noreferrer">
+            source ↗</a>
+        </div>
+      )}
+      {v.mock && (
+        <div className="sub" style={{ marginTop: 6, color: "var(--amber)" }}>
+          Mock mode: heuristic verdict, no real web search. Run with a real API
+          key to get a web-checked judgment.
+        </div>
+      )}
+    </div>
+  );
+}
+
 // -------------------------------------------------------------- Results
 export function ResultsPanel({ state }) {
-  const { results, baseline, instance, bestSolution, bestScore } = state;
+  const { results, baseline, instance, bestSolution, bestScore, originality } = state;
   const imp = results?.improvement_pct ??
     (bestScore != null && baseline
       ? Math.round(((baseline.score - bestScore) / baseline.score) * 1000) / 10
@@ -346,6 +449,7 @@ export function ResultsPanel({ state }) {
           </div>
         </div>
       )}
+      <OriginalityReport originality={originality} results={results} />
       {results?.holdout && <HoldoutReport holdout={results.holdout} />}
       {results?.winner_code && (
         <div className="panelcard">

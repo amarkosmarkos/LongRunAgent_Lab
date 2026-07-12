@@ -17,6 +17,16 @@ const DEFAULT_AGENT = {
   "branch.collapsed": "supervisor",
   "branch.merged": "supervisor",
   "branch.winner": "supervisor",
+  "originality.scored": "judge",
+  "knowledge.recalled": "archivist",
+  "knowledge.archived": "archivist",
+};
+
+const QUADRANT_PHRASE = {
+  "original+wins": "original knowledge that also beats the target",
+  rehash: "a known method — it works but is not new",
+  "novel-weak": "a novel idea that doesn't beat the target yet",
+  noise: "neither original nor strong enough",
 };
 
 export function narrate(ev, state) {
@@ -120,6 +130,44 @@ export function narrate(ev, state) {
         text: `Declared "${bname(ev.branch_id)}" the winner` +
           `${p.score != null ? ` with score ${fmtScore(p.score)}` : ""}.`,
       };
+    case "originality.scored": {
+      if (p.error) return { agent, text: `Originality check unavailable (${p.error}).` };
+      const v = p.verdict || {};
+      const where = v.exists_online
+        ? `the idea is already published${v.nearest_known_technique ? ` (closest: ${v.nearest_known_technique})` : ""}`
+        : "no public precedent found";
+      const q = QUADRANT_PHRASE[p.quadrant];
+      return {
+        agent,
+        text: `Judged the winning solver — originality ${v.originality}/10: ${where}` +
+          `${q ? `. Verdict: ${q}` : ""}.`,
+      };
+    }
+    case "knowledge.recalled": {
+      if (p.error) return { agent, text: `Lab memory unavailable (${p.error}).` };
+      if (p.empty)
+        return { agent, text: "Checked the lab's long-term memory — nothing archived yet; this run starts from scratch." };
+      const ns = (p.solvers || []).length;
+      const ni = (p.insights || []).length;
+      return {
+        agent,
+        text: `Recalled the lab's long-term memory: ${ns} elite solver${ns === 1 ? "" : "s"} ` +
+          `and ${ni} insight${ni === 1 ? "" : "s"} from ${p.archive_size?.runs ?? "?"} past runs — ` +
+          `handed to the Planner and Strategist.`,
+      };
+    }
+    case "knowledge.archived": {
+      if (p.error) return { agent, text: `Could not archive this run's knowledge (${p.error}).` };
+      const bits = [];
+      if (p.solver_added) bits.push(`the winning solver now holds the "${p.niche}" niche`);
+      if (p.insights_added) bits.push(`${p.insights_added} new insight${p.insights_added === 1 ? "" : "s"} joined the pool`);
+      return {
+        agent,
+        text: bits.length
+          ? `Archived this run into the lab's long-term memory: ${bits.join("; ")}.`
+          : "Archived this run — no new knowledge beat what the memory already holds.",
+      };
+    }
     case "run.completed": {
       const r = p.results || {};
       let text = `Run completed — ${r.improvement_pct}% improvement, ` +

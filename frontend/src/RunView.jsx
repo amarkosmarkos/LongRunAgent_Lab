@@ -28,6 +28,7 @@ export default function RunView({ runId, onBack }) {
   const [tab, setTab] = useState("story");
   const [selectedSeq, setSelectedSeq] = useState(null);
   const [mapOpen, setMapOpen] = useState(true);
+  const [sideOpen, setSideOpen] = useState(true); // hide to see just the diagram
   const eventsRef = useRef(events);
   eventsRef.current = events;
 
@@ -131,6 +132,11 @@ export default function RunView({ runId, onBack }) {
           <span className="v good">{fmtScore(state.bestScore)}</span></div>
         <div className="stat"><span className="k">improvement</span>
           <span className="v gold">{imp != null ? `${imp}%` : "—"}</span></div>
+        {state.originality?.verdict?.originality != null && (
+          <div className="stat" title="How original the winning solver's idea is, judged against the web">
+            <span className="k">originality</span>
+            <span className="v">{state.originality.verdict.originality}/10</span></div>
+        )}
         <div className="stat"><span className="k">cost</span>
           <span className="v">${state.costs.total.toFixed(4)}</span></div>
         <div className="stat"><span className="k">budget {budget ? `$${budget}` : ""}</span>
@@ -189,9 +195,15 @@ export default function RunView({ runId, onBack }) {
         </div>
       )}
 
-      <div className="runbody">
+      <div className={`runbody ${sideOpen ? "" : "solo"}`}>
         <div className="graphcol">
-          <GraphLegend />
+          <div className="graphhead">
+            <GraphLegend />
+            <button className="link sidetoggle" title="Show or hide the story / detail panel"
+              onClick={() => setSideOpen((o) => !o)}>
+              {sideOpen ? "hide panel ▸" : "◂ show panel"}
+            </button>
+          </div>
           <div className="graphwrap">
             <BranchGraph graph={graph} branches={state.branches}
               activity={live ? state.activity : {}}
@@ -214,6 +226,7 @@ export default function RunView({ runId, onBack }) {
             </div>
           )}
         </div>
+        {sideOpen && (
         <div className="sidepanel">
           <div className="tabs">
             {[["story", "Story"], ["branches", "Branches"], ["detail", "Detail"],
@@ -247,6 +260,7 @@ export default function RunView({ runId, onBack }) {
                 onSelect={select} state={state} />)}
           </div>
         </div>
+        )}
       </div>
     </div>
   );

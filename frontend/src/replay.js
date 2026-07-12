@@ -17,6 +17,9 @@ export function emptyState() {
     decisions: [],
     costs: { total: 0, byAgent: {}, byBranch: {}, calls: 0 },
     results: null,
+    originality: null, // {verdict, quadrant, ...} from the originality judge
+    memory: null, // knowledge recalled from the cross-run archive
+    archived: null, // what this run contributed back to the archive
     winnerBranchId: null,
     bestScore: null,
     bestBranchId: null,
@@ -150,8 +153,24 @@ function apply(s, ev) {
         else s.mockMode = false; // any real model means this run hit the API
       }
       break;
+    case "knowledge.recalled":
+      s.memory = p;
+      delete s.activity["@archivist"];
+      break;
+    case "knowledge.archived":
+      s.archived = p;
+      delete s.activity["@archivist"];
+      break;
+    case "originality.scored":
+      delete s.activity[ev.branch_id];
+      delete s.activity["@judge"];
+      s.originality = p.error ? { error: p.error } : { ...p };
+      break;
     case "run.completed":
       s.results = p.results;
+      // older runs persist the verdict inside results; live runs already set it
+      if (!s.originality && p.results?.originality)
+        s.originality = p.results.originality;
       s.endedStatus = "completed";
       s.activity = {}; // nothing is thinking once the run has ended
       break;

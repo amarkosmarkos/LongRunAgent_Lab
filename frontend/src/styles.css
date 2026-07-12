@@ -25,6 +25,8 @@
   --agent-critic: #c2417a;
   --agent-supervisor: #5f5e5a;
   --agent-researcher: #1f7a8c;
+  --agent-judge: #9a6a18;
+  --agent-archivist: #7a4f9e;
   --mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
 }
 
@@ -130,6 +132,10 @@ input, select {
 .graphcol { flex: 1.2; display: flex; flex-direction: column; min-width: 0; border-right: 1px solid var(--border); }
 .graphwrap { flex: 1; overflow: auto; position: relative; background: var(--surface); }
 .sidepanel { flex: 1; display: flex; flex-direction: column; min-width: 380px; max-width: 560px; }
+/* "hide panel" mode: collapse the story/detail and let the diagram fill the view */
+.runbody.solo .graphcol { border-right: none; }
+.graphhead { display: flex; align-items: center; gap: 10px; }
+.graphhead .sidetoggle { margin-left: auto; white-space: nowrap; }
 
 .mappanel { border-top: 1px solid var(--border); background: var(--surface); padding: 10px 14px; }
 .mappanel .maphead { display: flex; align-items: center; gap: 10px; font-size: 13px; font-weight: 600; margin-bottom: 6px; }
@@ -326,3 +332,27 @@ pre.code.prompt { max-height: 420px; white-space: pre-wrap; word-break: break-wo
 }
 .gtooltip .tt { font-weight: 600; margin-bottom: 3px; }
 .gtooltip .tl { color: var(--muted); margin: 2px 0; }
+
+/* ---- Originality report -------------------------------------------------- */
+.panelcard.originality { border-left: 3px solid var(--agent-judge); }
+.origtop { display: flex; gap: 14px; align-items: center; }
+.origscore { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; flex: 1; }
+.origscore .num { font-size: 30px; font-weight: 700; line-height: 1; color: var(--agent-judge); }
+.origscore .num small { font-size: 14px; font-weight: 500; color: var(--muted); }
+.origscore .lbl { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.4px; }
+.origscore .online { margin-top: 6px; font-size: 12px; font-weight: 600; }
+.origscore .online.yes { color: var(--amber); }
+.origscore .online.no { color: var(--green); }
+
+.badge.good { background: var(--green-soft); color: var(--green); }
+.badge.rehash { background: var(--amber-soft); color: var(--amber); }
+.badge.novel { background: var(--purple-soft); color: var(--purple); }
+.badge.noise { background: var(--surface2); color: var(--muted); }
+
+.quadchart { width: 220px; max-width: 50%; flex: 0 0 auto; }
+.quadchart .qcell-good { fill: var(--green-soft); }
+.quadchart .qgrid { stroke: var(--border-strong); stroke-width: 1; stroke-dasharray: 3 3; }
+.quadchart .qaxis { stroke: var(--border-strong); stroke-width: 1.2; }
+.quadchart .qlab { fill: var(--muted); font-size: 9px; }
+.quadchart .qhint { fill: var(--green); font-size: 8px; font-weight: 600; }
+.quadchart .qdot { fill: var(--agent-judge); stroke: var(--surface); stroke-width: 2; }

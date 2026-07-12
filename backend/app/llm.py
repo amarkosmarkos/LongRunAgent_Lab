@@ -66,3 +66,16 @@ class LLMClient:
             break
         text = "\n".join(t for t in texts if t)
         return LLMResult(text, model, in_tok, out_tok, truncated=truncated)
+
+    def judge_originality(self, code: str) -> tuple[dict, "LLMResult"]:
+        """Score how original a solver is. Returns (verdict, LLMResult) so the
+        caller can attribute cost. Mock mode returns a deterministic, API-free
+        verdict so the demo still shows the originality panel."""
+        from . import originality
+        if self.mock:
+            verdict = originality.mock_verdict(code)
+            in_tok = max(200, len(code) // 4)
+            out_tok = 120
+            return verdict, LLMResult("", "mock", in_tok, out_tok)
+        verdict, in_tok, out_tok = originality.judge(self._client, code)
+        return verdict, LLMResult("", originality.JUDGE_MODEL, in_tok, out_tok)

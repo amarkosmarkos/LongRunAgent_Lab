@@ -52,6 +52,12 @@ DEFAULT_RUN_CONFIG = {
     "experiment_max_attempts": 3,
     # run a web-research agent (Anthropic web_search) before planning
     "enable_web_research": True,
+    # after a winner is found, judge how original its algorithm is (Anthropic
+    # web_search): does the idea already exist online, or did the lab create it?
+    "enable_originality_judge": True,
+    # long-term memory: recall past runs' elite solvers + insights before
+    # planning, and archive this run's outcome at the end (app.knowledge)
+    "enable_knowledge_archive": True,
     # high enough that no single basic strategy reaches it -> forces real exploration
     "target_improvement_pct": 18.0,
     "stagnation_rounds": 2,

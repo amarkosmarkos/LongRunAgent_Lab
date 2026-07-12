@@ -9,6 +9,7 @@ import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+from .. import knowledge
 from ..llm import LLMClient
 from ..models import Branch, Insight
 from ..problems import PROBLEMS
@@ -36,6 +37,7 @@ class Orchestrator:
         self.baseline_solution: list = []
         self.baseline_score: float = 0.0
         self.research: str | None = None
+        self.memory: str | None = None  # prompt digest recalled from the archive
         self.round = 0
         self._lock = threading.Lock()  # guards cost + insights across parallel branches
 
@@ -54,6 +56,7 @@ class Orchestrator:
         "critic": "analysing the result",
         "supervisor": "reviewing branches and deciding what to keep",
         "researcher": "searching the web for state-of-the-art approaches",
+        "judge": "checking the web to see if the winning idea is original",
     }
 
     def _call(self, role: str, system: str, prompt: str,
@@ -87,6 +90,17 @@ class Orchestrator:
 
     def _active(self) -> list[Branch]:
         return [b for b in self.branches.values() if b.status == "active"]
+
+    def _relevant_insights(self, query: str, k: int = 8) -> list[dict]:
+        """Top-k insights relevant to a branch's hypothesis instead of dumping
+        the whole pool into the prompt — keeps context focused as insights grow."""
+        with self._lock:
+            pool = list(self.insights)
+        if len(pool) <= k:
+            return [i.public() for i in pool]
+        idx = knowledge.rank(query, [i.text for i in pool], k)
+        picked = idx or range(k)
+        return [pool[i].public() for i in picked]
 
     def _best_overall(self) -> tuple[Branch | None, float | None]:
         best_b, best_s = None, None
@@ -145,6 +159,7 @@ class Orchestrator:
         try:
             self.run.set_status("scoping")
             self._setup()
+            self._recall_phase()
             self._research_phase()
             self._scope_phase()
             self.run.set_status("running")
@@ -176,6 +191,29 @@ class Orchestrator:
                          "score": self.baseline_score, "algorithm": baseline_alg},
         })
 
+    def _recall_phase(self):
+        """Long-term memory: recall what previous runs on this problem already
+        learned (elite solvers per technique niche + transferable insights) so
+        the Planner and Strategist build on it instead of starting from zero.
+        Pure retrieval — no LLM call, no cost."""
+        if not self.cfg.get("enable_knowledge_archive", True):
+            return
+        try:
+            query = f"{self.problem.description} {self.problem.instance_stats(self.instance)}"
+            recall = knowledge.ARCHIVE.recall(self.problem.name, query)
+            if recall:
+                self.memory = knowledge.KnowledgeArchive.as_prompt(recall)
+                self.run.emit("knowledge.recalled", agent="archivist",
+                              payload=recall)
+            else:
+                self.run.emit("knowledge.recalled", agent="archivist",
+                              payload={"empty": True,
+                                       "archive_size": knowledge.ARCHIVE.size()})
+        except Exception as e:  # memory must never break a run
+            self.memory = None
+            self.run.emit("knowledge.recalled", agent="archivist",
+                          payload={"error": f"{type(e).__name__}: {e}"})
+
     def _research_phase(self):
         """Optional: a web-research agent surveys the state of the art and feeds
         the Planner and Strategist. Degrades gracefully if web search is off or
@@ -202,7 +240,7 @@ class Orchestrator:
             agents.planner_prompt(self.problem.description,
                                   self.problem.instance_stats(self.instance),
                                   self.baseline_alg, self.baseline_score, self.cfg,
-                                  research=self.research),
+                                  research=self.research, memory=self.memory),
             context={"config": self.cfg, "baseline_score": self.baseline_score})
         self.scope = agents.parse_json(res.text)
         self.run.emit("scope.defined", agent="planner", payload={"scope": self.scope})
@@ -219,7 +257,8 @@ class Orchestrator:
             "strategist", agents.STRATEGIST_SYSTEM,
             agents.strategist_prompt(self.problem.description,
                                      self.problem.instance_stats(self.instance),
-                                     self.scope, k, research=self.research),
+                                     self.scope, k, research=self.research,
+                                     memory=self.memory),
             context={"k": k})
         hyps = agents.parse_json(res.text).get("hypotheses", [])
         self.run.emit("hypotheses.proposed", agent="strategist",
@@ -365,7 +404,7 @@ class Orchestrator:
                     self.problem.solver_contract(),
                     self.problem.instance_stats(self.instance),
                     {**b.public(), "best_code": b.best_code}, rnd, last, critique,
-                    [i.public() for i in self.insights],
+                    self._relevant_insights(f"{b.hypothesis} {b.strategy}"),
                     self.cfg["experiment_timeout_s"], retry_feedback=retry_feedback),
                 context={"strategy": b.strategy, "attempt": attempt}, branch_id=b.id,
                 action=action)
@@ -556,4 +595,53 @@ class Orchestrator:
             self.run.emit("branch.winner", agent="supervisor", branch_id=winner.id,
                           payload={"score": winner.best_score,
                                    "improvement_pct": results["improvement_pct"]})
+            # originality check: is the winning solver a genuinely new idea, or a
+            # textbook method already on the internet? Crossed with the score,
+            # this tells us where the lab actually creates original knowledge.
+            if self.cfg.get("enable_originality_judge", True) and winner.best_code:
+                originality = self._score_originality(winner, results)
+                if originality is not None:
+                    results["originality"] = originality
+        # long-term memory: archive this run's outcome so future runs start
+        # from what it learned (elite solver per niche + insights)
+        if self.cfg.get("enable_knowledge_archive", True):
+            try:
+                outcome = knowledge.ARCHIVE.ingest_run(
+                    self.run.id, self.problem.name, results,
+                    [i.text for i in self.insights])
+                self.run.emit("knowledge.archived", agent="archivist",
+                              payload=outcome)
+            except Exception as e:  # memory must never break concluding
+                self.run.emit("knowledge.archived", agent="archivist",
+                              payload={"error": f"{type(e).__name__}: {e}"})
         self.run.emit("run.completed", payload={"results": results})
+
+    def _score_originality(self, winner, results: dict) -> dict | None:
+        from .. import originality as orig
+        # don't let the judge's own failure break concluding the run
+        try:
+            self.run.emit("agent.thinking", agent="judge", branch_id=winner.id,
+                          payload={"action": self._THINKING["judge"]})
+            verdict, res = self.llm.judge_originality(winner.best_code)
+            with self._lock:
+                self.total_cost += res.cost_usd
+                self.cost_by_agent["judge"] = (
+                    self.cost_by_agent.get("judge", 0.0) + res.cost_usd)
+            # keep the concluded totals consistent now that the judge has spent
+            results["total_cost_usd"] = round(self.total_cost, 6)
+            results["cost_by_agent"] = {k: round(v, 6)
+                                        for k, v in self.cost_by_agent.items()}
+            quadrant = orig.quadrant(verdict.get("originality"),
+                                     results.get("improvement_pct"),
+                                     results.get("target_improvement_pct"))
+            payload = {"verdict": verdict, "quadrant": quadrant,
+                       "improvement_pct": results.get("improvement_pct"),
+                       "cost_usd": round(res.cost_usd, 6),
+                       "total_cost_usd": round(self.total_cost, 6)}
+            self.run.emit("originality.scored", agent="judge", branch_id=winner.id,
+                          payload=payload)
+            return {"verdict": verdict, "quadrant": quadrant}
+        except Exception as e:
+            self.run.emit("originality.scored", agent="judge", branch_id=winner.id,
+                          payload={"error": f"{type(e).__name__}: {e}"})
+            return None

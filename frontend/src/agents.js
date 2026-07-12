@@ -25,6 +25,14 @@ export const AGENTS = {
     label: "Researcher", color: "var(--agent-researcher)", initials: "RE",
     blurb: "searches the web for state-of-the-art approaches",
   },
+  judge: {
+    label: "Originality Judge", color: "var(--agent-judge)", initials: "OJ",
+    blurb: "checks the web to see if the winning idea is genuinely original",
+  },
+  archivist: {
+    label: "Archivist", color: "var(--agent-archivist)", initials: "AV",
+    blurb: "recalls past runs' knowledge and archives what this run learned",
+  },
 };
 
 export function agentMeta(name) {

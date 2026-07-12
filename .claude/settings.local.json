@@ -33,7 +33,17 @@
       "Skill(claude-api)",
       "Skill(claude-api:*)",
       "Bash(python -c \"import elkai; print\\('elkai already installed'\\)\")",
-      "Bash(pip install *)"
+      "Bash(pip install *)",
+      "Bash(git filter-branch *)",
+      "Bash(git stash *)",
+      "Bash(git push *)",
+      "Bash(python -c \"from app.scripts.originality import _iter_runs; runs=list\\(_iter_runs\\(None\\)\\); print\\('completed runs with winner:', len\\(runs\\)\\); [print\\(r['id'], r['problem'], r['results'].get\\('improvement_pct'\\)\\) for r in runs[:10]]\")",
+      "Bash(python -m app.scripts.originality --help)",
+      "Bash(LLM_MOCK=1 python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --log-level warning)",
+      "Bash(curl -s http://127.0.0.1:8000/api/health)",
+      "Bash(curl -s \"http://127.0.0.1:8000/api/runs\")",
+      "Bash(python -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\('runs:', len\\(d\\)\\); print\\('first ids:', [r['id'] for r in d[:3]]\\)\")",
+      "WebFetch(domain:medium.com)"
     ]
   }
 }
