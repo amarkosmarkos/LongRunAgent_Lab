@@ -12,8 +12,8 @@ these files instead of calling /api, so the whole experience — branch graph,
 story, replay, originality, lab memory — works fully static.
 
 Usage (from backend/):
-  python -m app.scripts.export_demo                 # curated default set
-  python -m app.scripts.export_demo <run_id> ...    # explicit runs
+  python -m app.scripts.export_demo                 # every run on disk
+  python -m app.scripts.export_demo <run_id> ...    # only the given runs
 """
 from __future__ import annotations
 
@@ -25,12 +25,13 @@ from ..config import DATA_DIR
 
 DEMO_DIR = (Path(__file__).resolve().parents[3] / "frontend" / "public" / "demo")
 
-# Curated default: the latest runs that exercise every feature (branch graph,
-# originality judge, cross-run lab memory / Archivist).
-DEFAULT_RUNS = [
-    "20260712-192830-41a3a2",   # TSPLIB benchmark — the latest run
-    "20260712-162942-5884fe",   # random Euclidean — completed
-]
+def _all_runs() -> list[str]:
+    """Every run directory on disk that has an event log, so the published demo
+    mirrors the full experiment history exactly like the live runs list."""
+    if not DATA_DIR.exists():
+        return []
+    return sorted(d.name for d in DATA_DIR.iterdir()
+                  if (d / "events.jsonl").exists() and (d / "run.json").exists())
 
 
 def _load(run_id: str) -> tuple[dict, list[dict]] | None:
@@ -46,7 +47,11 @@ def _load(run_id: str) -> tuple[dict, list[dict]] | None:
 
 
 def main(argv: list[str]) -> int:
-    run_ids = argv or DEFAULT_RUNS
+    run_ids = argv or _all_runs()
+    # a fresh export shouldn't leave stale run files behind
+    if not argv:
+        for old in DEMO_DIR.glob("*.json"):
+            old.unlink()
     DEMO_DIR.mkdir(parents=True, exist_ok=True)
     index = []
     for run_id in run_ids:
