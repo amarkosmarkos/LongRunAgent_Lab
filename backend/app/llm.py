@@ -31,7 +31,8 @@ class LLMClient:
             import anthropic
             self._client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
-    def call(self, role: str, system: str, prompt: str, context: dict | None = None) -> LLMResult:
+    def call(self, role: str, system: str, prompt: str, context: dict | None = None,
+             model: str | None = None) -> LLMResult:
         if self.mock:
             from .engine.mock_responses import mock_call
             text = mock_call(role, context or {})
@@ -40,7 +41,7 @@ class LLMClient:
             out_tok = max(80, len(text) // 4)
             return LLMResult(text, "mock", in_tok, out_tok)
 
-        model = AGENT_MODELS.get(role, AGENT_MODELS["experimenter"])
+        model = model or AGENT_MODELS.get(role, AGENT_MODELS["experimenter"])
         # the researcher gets Anthropic's server-side web search; the API runs the
         # search loop and may return stop_reason="pause_turn" to be resumed
         tools = ([{"type": "web_search_20260209", "name": "web_search"}]

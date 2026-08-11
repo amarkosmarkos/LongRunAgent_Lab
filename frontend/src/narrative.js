@@ -20,6 +20,8 @@ const DEFAULT_AGENT = {
   "originality.scored": "judge",
   "knowledge.recalled": "archivist",
   "knowledge.archived": "archivist",
+  "novelty.rejected": "experimenter",
+  "population.seeded": "archivist",
 };
 
 const QUADRANT_PHRASE = {
@@ -92,12 +94,33 @@ export function narrate(ev, state) {
       return { agent: "strategist", text: `Opened branch "${b.name}" — ${b.hypothesis}` };
     }
     case "experiment.retry":
+      if ((p.reason || "").startsWith("novelty gate")) return null; // narrated by novelty.rejected
       return {
         agent,
         text: `Round ${p.round} on "${bname(ev.branch_id)}" hit an error ` +
           `(${p.reason}) — auto-retrying (${p.retry}/${(p.max_attempts || 1) - 1}) ` +
           `instead of abandoning the branch.`,
       };
+    case "novelty.rejected":
+      return {
+        agent,
+        text: `Proposed a near-duplicate on "${bname(ev.branch_id)}" — ` +
+          `${Math.round((p.similarity || 0) * 100)}% structurally similar to a ` +
+          `program the lab already evaluated. The novelty gate rejected it ` +
+          `before spending any budget and demanded a genuinely different algorithm.`,
+      };
+    case "population.seeded": {
+      const n = p.archive_seeds || 0;
+      const bits = [];
+      if (n) bits.push(`${n} past elite solver${n === 1 ? "" : "s"} joined the gene pool as parents`);
+      if (p.bandit_models) bits.push("the operator bandit will learn which mutation pays off");
+      if (!bits.length) return null;
+      return { agent, text: `Prepared the evolving population: ${bits.join("; ")}.` };
+    }
+    case "git.initialized":
+      return p.available
+        ? { agent: null, text: "Git substrate ready — every solver attempt in this run becomes a real commit in the run's repository." }
+        : null;
     case "experiment.completed": {
       const name = bname(ev.branch_id);
       if (!p.valid)

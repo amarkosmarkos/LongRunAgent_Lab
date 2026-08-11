@@ -224,7 +224,11 @@ EXPERIMENTER_SYSTEM = (
 def experimenter_prompt(contract: str, stats: str, branch: dict, round_: int,
                         last_result: dict | None, critique: str | None,
                         insights: list[dict], time_limit_s: int,
-                        retry_feedback: str | None = None) -> str:
+                        retry_feedback: str | None = None,
+                        operator_instruction: str | None = None,
+                        base: dict | None = None,
+                        inspirations: list[dict] | None = None,
+                        crossover: dict | None = None) -> str:
     parts = [f"""You work on branch "{branch['name']}".
 HYPOTHESIS: {branch['hypothesis']}
 STRATEGY: {branch['strategy']}
@@ -232,9 +236,33 @@ ROUND: {round_}. TIME LIMIT: your solve() must finish well under {time_limit_s}s
 
 {contract}
 INSTANCE: {stats}"""]
-    if branch.get("best_code"):
-        parts.append(f"YOUR CURRENT BEST CODE (score {branch.get('best_score')}):\n"
-                     f"```python\n{branch['best_code']}\n```")
+    if operator_instruction:
+        parts.append(operator_instruction)
+    if crossover:
+        parts.append(
+            "CROSSOVER TASK — this branch is a MERGE of two lineages. Combine "
+            "them into one solver that beats both.\n"
+            f"WHY THEY WERE MERGED: {crossover.get('reflection')}\n"
+            f"PARENT A \"{crossover.get('a_name')}\" (score {crossover.get('a_score')}):\n"
+            f"```python\n{crossover.get('a_code')}\n```\n"
+            f"PARENT B \"{crossover.get('b_name')}\" (score {crossover.get('b_score')}):\n"
+            f"```python\n{crossover.get('b_code')}\n```")
+    elif base and base.get("code"):
+        parts.append(f"BASE PROGRAM to mutate — {base.get('label', 'your current best')} "
+                     f"(score {base.get('score')}):\n"
+                     f"```python\n{base['code']}\n```")
+    if inspirations:
+        blocks = []
+        for insp in inspirations:
+            blocks.append(
+                f"- \"{insp.get('name') or insp.get('id')}\" "
+                f"[niche: {insp.get('niche') or '+'.join(insp.get('tags') or []) or '?'}] "
+                f"score {insp.get('score')}:\n```python\n{insp['code']}\n```")
+        parts.append(
+            "INSPIRATION PROGRAMS from OTHER niches of the population (do not "
+            "copy any of them — steal their best distinct idea if it helps, or "
+            "deliberately avoid their whole family of approaches):\n"
+            + "\n".join(blocks))
     if last_result:
         parts.append(f"LAST EXPERIMENT RESULT: {json.dumps(last_result)}")
     if critique:

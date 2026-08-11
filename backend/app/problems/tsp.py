@@ -35,6 +35,32 @@ def lkh_ref(name: str) -> dict:
             "gap_pct": gap_pct(length, inst["optimum"])}
 
 
+def tour_behavior(cities: list[list[float]], tour: list[int],
+                  exec_time: float, timeout_s: int) -> dict:
+    """Behavior descriptor of a tour: the SHAPE of the solution + the time
+    profile of the solver, independent of what the code claims to do. Used to
+    bin programs into MAP-Elites niches (see app.population)."""
+    n = len(tour)
+    lengths = []
+    for i in range(n):
+        x1, y1 = cities[tour[i]]
+        x2, y2 = cities[tour[(i + 1) % n]]
+        lengths.append(math.hypot(x2 - x1, y2 - y1))
+    mean = sum(lengths) / n if n else 0.0
+    if mean <= 0:
+        return {"edge_cv": 0.0, "long_edge_ratio": 0.0,
+                "time_frac": min(1.0, exec_time / max(timeout_s, 1e-9))}
+    var = sum((l - mean) ** 2 for l in lengths) / n
+    return {
+        # dispersion of edge lengths: uniform short hops vs mixed structure
+        "edge_cv": round(math.sqrt(var) / mean, 4),
+        # worst-edge ratio: does the tour tolerate one long "closing" jump?
+        "long_edge_ratio": round(max(lengths) / mean, 4),
+        # how much of the wall budget the solver actually consumes
+        "time_frac": round(min(1.0, exec_time / max(timeout_s, 1e-9)), 4),
+    }
+
+
 def tour_length(cities: list[list[float]], tour: list[int]) -> float:
     total = 0.0
     n = len(tour)
@@ -90,6 +116,10 @@ class TSP(Problem):
     def instance_stats(self, instance: dict) -> str:
         return (f"{instance['n']} cities, uniform random in [0,1000]^2, "
                 f"seed={instance['seed']}")
+
+    def behavior_descriptor(self, instance: dict, solution,
+                            exec_time: float, timeout_s: int) -> dict | None:
+        return tour_behavior(instance["cities"], solution, exec_time, timeout_s)
 
     def solver_contract(self) -> str:
         return (
@@ -167,6 +197,17 @@ class TSPBenchmark(Problem):
                         inst["optimum"])
                 for name, inst in self._dev_items(instance)]
         return round(sum(gaps) / len(gaps), 3)
+
+    def behavior_descriptor(self, instance: dict, solution,
+                            exec_time: float, timeout_s: int) -> dict | None:
+        # describe behavior on the largest dev instance (most informative tour)
+        name = max(instance["dev"],
+                   key=lambda n: len(instance["instances"][n]["cities"]))
+        tour = (solution or {}).get(name)
+        if not tour:
+            return None
+        return tour_behavior(instance["instances"][name]["cities"], tour,
+                             exec_time, timeout_s)
 
     def instance_stats(self, instance: dict) -> str:
         sizes = ", ".join(

@@ -6,8 +6,8 @@ import BranchGraph, { GraphLegend } from "./components/BranchGraph.jsx";
 import TourCanvas from "./components/TourCanvas.jsx";
 import { agentMeta } from "./agents.js";
 import {
-  BranchesPanel, CostPanel, DetailPanel, EventFeed, KnowledgePanel,
-  ResultsPanel, ScopePanel, StoryPanel,
+  BranchesPanel, CostPanel, DetailPanel, EvolutionPanel, EventFeed,
+  KnowledgePanel, ResultsPanel, ScopePanel, StoryPanel,
 } from "./components/Panels.jsx";
 
 const TERMINAL = ["completed", "failed", "stopped", "budget_exceeded"];
@@ -230,7 +230,8 @@ export default function RunView({ runId, onBack }) {
         <div className="sidepanel">
           <div className="tabs">
             {[["story", "Story"], ["branches", "Branches"], ["detail", "Detail"],
-              ["scope", "Scope"], ["knowledge", "Knowledge"], ["costs", "Costs"],
+              ["scope", "Scope"], ["knowledge", "Knowledge"],
+              ["evolution", "Evolution"], ["costs", "Costs"],
               ["results", "Results"], ["events", "Events"]]
               .map(([k, label]) => (
                 <button key={k} className={tab === k ? "active" : ""}
@@ -240,6 +241,8 @@ export default function RunView({ runId, onBack }) {
                     ` (${state.insights.length})`}
                   {k === "branches" && state.branchOrder.length > 0 &&
                     ` (${state.branchOrder.length})`}
+                  {k === "evolution" && state.noveltyRejections.length > 0 &&
+                    ` (${state.noveltyRejections.length}≠)`}
                 </button>
               ))}
           </div>
@@ -253,6 +256,7 @@ export default function RunView({ runId, onBack }) {
                 selectedSeq={selectedSeq} onSelect={select} />)}
             {tab === "scope" && <ScopePanel state={state} />}
             {tab === "knowledge" && <KnowledgePanel state={state} />}
+            {tab === "evolution" && <EvolutionPanel state={state} />}
             {tab === "costs" && <CostPanel state={state} />}
             {tab === "results" && <ResultsPanel state={state} />}
             {tab === "events" && (

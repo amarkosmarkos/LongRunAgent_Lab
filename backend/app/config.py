@@ -20,6 +20,13 @@ MODEL_PRICING = {
     "mock": (3.00, 15.00),  # mock mode simulates sonnet-level pricing
 }
 
+# optional ensemble for the experimenter: comma-separated model ids. With more
+# than one, a per-run UCB1 bandit learns which model mutates best (ShinkaEvolve
+# style); with one, the bandit only learns over operators.
+EXPERIMENTER_MODELS = [m.strip() for m in
+                       os.getenv("MODELS_EXPERIMENTER", "").split(",")
+                       if m.strip()]
+
 AGENT_MODELS = {
     "planner": os.getenv("MODEL_PLANNER", "claude-sonnet-4-6"),
     "strategist": os.getenv("MODEL_STRATEGIST", "claude-sonnet-4-6"),
@@ -61,4 +68,21 @@ DEFAULT_RUN_CONFIG = {
     # high enough that no single basic strategy reaches it -> forces real exploration
     "target_improvement_pct": 18.0,
     "stagnation_rounds": 2,
+    # ---- evolution substrate (git DAG + population + novelty pressure) ----
+    # every attempt becomes a real git commit in data/runs/<id>/repo
+    "enable_git_repo": True,
+    # reject near-copies of already-evaluated programs BEFORE spending on them
+    "enable_novelty_gate": True,
+    # containment similarity above which a candidate counts as a near-copy of
+    # ANOTHER program (own-parent refinements are compared at 0.995)
+    "novelty_threshold": 0.92,
+    # exploratory operators (rewrite/explore) are held to a stricter bar
+    "novelty_threshold_explore": 0.85,
+    # probability that an attempt mutates a parent sampled from the WHOLE
+    # population (DGM-style) instead of the branch's own best code
+    "population_parent_prob": 0.35,
+    # elite programs from distinct niches shown as inspiration in prompts
+    "inspiration_count": 3,
+    # UCB1 bandit over mutation operators (refine/rewrite/recombine/explore)
+    "enable_operator_bandit": True,
 }

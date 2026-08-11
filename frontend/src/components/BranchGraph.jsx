@@ -14,6 +14,11 @@ const COLORS = {
   collapsed: "#c93b3b",
   winner: "#a8780f",
   retry: "#a87410",
+  novelty: "#8a5fd4",
+};
+// short operator tags shown next to experiment nodes
+const OP_TAG = {
+  refine: "refine", rewrite: "rewrite", recombine: "recomb", explore: "explore",
 };
 const EDGE = "#d8d4c8";
 const MERGE = "#6f63d2";
@@ -49,17 +54,22 @@ function tooltipFor(n, branches) {
       if (b?.hypothesis) lines.push(b.hypothesis);
       return { title: `Branch: ${b?.name || "?"}`, lines };
     }
-    case "improved":
-      return {
-        title: `Round ${n.round} — score ${fmtScore(n.score)}`,
-        lines: [n.beats ? "Beats the baseline" : "Improved this branch (still above baseline)",
-          "Click to see the code and the critic's verdict."],
-      };
-    case "neutral":
-      return {
-        title: `Round ${n.round} — score ${fmtScore(n.score)}`,
-        lines: ["No improvement this round.", "Click to see what was tried."],
-      };
+    case "improved": {
+      const lines = [n.beats ? "Beats the baseline" : "Improved this branch (still above baseline)"];
+      if (n.operator) lines.push(`Mutation operator: ${n.operator}`);
+      if (n.niche) lines.push(`Behavior niche: ${n.niche}${n.newNiche ? " (NEW — first program to behave this way)" : ""}`);
+      if (n.gitSha) lines.push(`Git commit ${n.gitSha.slice(0, 7)}`);
+      lines.push("Click to see the code and the critic's verdict.");
+      return { title: `Round ${n.round} — score ${fmtScore(n.score)}`, lines };
+    }
+    case "neutral": {
+      const lines = ["No improvement this round."];
+      if (n.operator) lines.push(`Mutation operator: ${n.operator}`);
+      if (n.niche) lines.push(`Behavior niche: ${n.niche}${n.newNiche ? " (NEW)" : ""}`);
+      if (n.gitSha) lines.push(`Git commit ${n.gitSha.slice(0, 7)}`);
+      lines.push("Click to see what was tried.");
+      return { title: `Round ${n.round} — score ${fmtScore(n.score)}`, lines };
+    }
     case "failed":
       return {
         title: `Round ${n.round} — experiment failed`,
@@ -81,6 +91,14 @@ function tooltipFor(n, branches) {
         title: `Auto-retry ${n.retry}/${(n.maxAttempts || 1) - 1}`,
         lines: ["The experiment failed and was re-asked immediately instead of "
           + "killing the branch.", n.label || "", "Click for details."],
+      };
+    case "novelty":
+      return {
+        title: "Novelty gate — near-duplicate rejected",
+        lines: ["The proposed solver was structurally too similar to a program "
+          + "the lab already evaluated, so it was bounced back BEFORE spending "
+          + "any evaluation budget.", n.label || "",
+          "The Experimenter must produce a genuinely different algorithm."],
       };
     default:
       return null;
@@ -194,14 +212,29 @@ export default function BranchGraph({ graph, branches, activity, selectedSeq, on
                   <circle cx={x} cy={y} r={6.5} fill="#faf0da" stroke={RETRY} strokeWidth="1.8" />
                   <text x={x} y={y + 3.5} textAnchor="middle" fontSize="9.5" fill={RETRY}>↻</text>
                 </g>
+              ) : n.kind === "novelty" ? (
+                <g>
+                  <circle cx={x} cy={y} r={6.5} fill="#f1ecfb"
+                    stroke={COLORS.novelty} strokeWidth="1.8" />
+                  <text x={x} y={y + 3.5} textAnchor="middle" fontSize="9"
+                    fill={COLORS.novelty}>≠</text>
+                </g>
               ) : (
                 <circle cx={x} cy={y} r={7} fill={color} />
               )}
               {(n.kind === "improved" || n.kind === "neutral") && (
-                <text x={x + 13} y={y + 4} fontSize="10.5" fill={
-                  n.beats ? COLORS.improved : TEXT_MUTED} fontFamily="monospace">
-                  {n.label}
-                </text>
+                <g>
+                  <text x={x + 13} y={y + 4} fontSize="10.5" fill={
+                    n.beats ? COLORS.improved : TEXT_MUTED} fontFamily="monospace">
+                    {n.label}
+                  </text>
+                  {n.operator && (
+                    <text x={x + 13 + (n.label || "").length * 6.6 + 6} y={y + 4}
+                      fontSize="8.5" fill={n.newNiche ? COLORS.novelty : TEXT_FAINT}>
+                      {OP_TAG[n.operator] || n.operator}{n.newNiche ? " ◆new niche" : ""}
+                    </text>
+                  )}
+                </g>
               )}
               {n.kind === "failed" && (
                 <text x={x + 13} y={y + 4} fontSize="10.5" fill={COLORS.failed}
@@ -219,6 +252,10 @@ export default function BranchGraph({ graph, branches, activity, selectedSeq, on
               {n.kind === "retry" && (
                 <text x={x + 13} y={y + 4} fontSize="9.5" fill={COLORS.retry}>
                   retry {n.retry} · {(n.label || "").slice(0, 26)}</text>
+              )}
+              {n.kind === "novelty" && (
+                <text x={x + 13} y={y + 4} fontSize="9.5" fill={COLORS.novelty}>
+                  duplicate rejected · {(n.label || "").replace("novelty gate: ", "").slice(0, 24)}</text>
               )}
             </g>
           );
@@ -263,6 +300,7 @@ export function GraphLegend() {
       <span><span className="dot" style={{ background: "var(--faint)" }} /> no gain</span>
       <span><span className="dot" style={{ background: "var(--red)" }} /> failed</span>
       <span style={{ color: "#a87410" }}>↻ auto-retry</span>
+      <span style={{ color: "#8a5fd4" }}>≠ novelty gate</span>
       <span style={{ color: "var(--red)" }}>⊘ collapsed</span>
       <span style={{ color: "var(--purple)" }}>— merge</span>
       <span style={{ color: "var(--gold)" }}>★ winner</span>

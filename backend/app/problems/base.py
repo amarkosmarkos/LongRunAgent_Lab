@@ -49,3 +49,10 @@ class Problem(ABC):
         """Optionally evaluate the winning code on held-out data at the end of
         a run. Return a JSON-serializable report, or None if not supported."""
         return None
+
+    def behavior_descriptor(self, instance: dict, solution,
+                            exec_time: float, timeout_s: int) -> dict | None:
+        """Describe what a valid solution BEHAVES like (not what its code says):
+        a small dict of floats used to bin programs into MAP-Elites niches.
+        Return None if the problem has no meaningful descriptor."""
+        return None

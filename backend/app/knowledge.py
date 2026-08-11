@@ -225,6 +225,20 @@ class KnowledgeArchive:
             "archive_size": self.size(),
         }
 
+    def recall_seed_programs(self, problem: str, k: int = RECALL_SOLVERS) -> list[dict]:
+        """Elite solvers WITH their code, for seeding a new run's population —
+        past winners re-enter the gene pool as first-class parents instead of
+        being reduced to a prompt digest."""
+        with self._lock:
+            elites = [s for s in self._data["solvers"].values()
+                      if s.get("code") and
+                      (not problem or s.get("problem") in ("", problem))]
+        elites.sort(key=lambda s: -(s.get("improvement_pct") or 0))
+        return [{"name": s.get("name"), "code": s["code"],
+                 "improvement_pct": s.get("improvement_pct"),
+                 "techniques": s.get("techniques") or []}
+                for s in elites[:k]]
+
     @staticmethod
     def as_prompt(recall: dict) -> str:
         """Render a recall digest as a prompt section for planner/strategist."""

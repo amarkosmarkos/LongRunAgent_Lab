@@ -25,6 +25,11 @@ export function emptyState() {
     bestBranchId: null,
     bestSolution: null,
     endedStatus: null,
+    git: null, // {available, root_sha, path} — the run's real git repository
+    gitCommits: 0, // solver attempts committed to the run's git DAG so far
+    populationSeeded: null, // archive elites + bandit config injected at start
+    noveltyRejections: [], // near-duplicates bounced by the novelty gate
+    evolution: null, // final evolution summary (population/niches/bandit/git log)
     activity: {}, // key -> {agent, action, round, branch_id} of agents thinking now
     models: [], // distinct LLM models seen
     mockMode: null, // null=unknown, true=mock LLM, false=real Claude
@@ -153,6 +158,22 @@ function apply(s, ev) {
         else s.mockMode = false; // any real model means this run hit the API
       }
       break;
+    case "git.initialized":
+      s.git = p;
+      break;
+    case "population.seeded":
+      s.populationSeeded = p;
+      delete s.activity["@archivist"];
+      break;
+    case "git.committed": {
+      s.gitCommits += 1;
+      const b = s.branches[ev.branch_id];
+      if (b) b.git_sha = p.sha;
+      break;
+    }
+    case "novelty.rejected":
+      s.noveltyRejections.push({ ...p, branch_id: ev.branch_id, seq: ev.seq });
+      break;
     case "knowledge.recalled":
       s.memory = p;
       delete s.activity["@archivist"];
@@ -168,6 +189,7 @@ function apply(s, ev) {
       break;
     case "run.completed":
       s.results = p.results;
+      s.evolution = p.results?.evolution || null;
       // older runs persist the verdict inside results; live runs already set it
       if (!s.originality && p.results?.originality)
         s.originality = p.results.originality;
@@ -231,9 +253,13 @@ export function buildGraph(events, cursor) {
         break;
       }
       case "experiment.retry": {
-        // a recoverable failure that was re-asked immediately — draw the loop
+        // a recoverable failure that was re-asked immediately — draw the loop.
+        // novelty-gate rejections are drawn as their own kind: the lab refused
+        // to evaluate a near-duplicate and demanded a different algorithm
+        const isNovelty = (p.reason || "").startsWith("novelty gate");
         const id = push({
-          id: `n${ev.seq}`, kind: "retry", lane: lanes[ev.branch_id] ?? 0,
+          id: `n${ev.seq}`, kind: isNovelty ? "novelty" : "retry",
+          lane: lanes[ev.branch_id] ?? 0,
           row: row++, label: p.reason || "retry", branch_id: ev.branch_id,
           seq: ev.seq, retry: p.retry, maxAttempts: p.max_attempts, round: p.round,
         });
@@ -249,6 +275,8 @@ export function buildGraph(events, cursor) {
           label: p.valid ? Number(p.score).toFixed(1) : "error",
           branch_id: ev.branch_id, seq: ev.seq,
           score: p.score, round: p.round, beats: p.beats_baseline,
+          operator: p.operator, gitSha: p.git_sha, niche: p.niche?.niche,
+          newNiche: p.niche?.new_niche, parentProgram: p.parent_program,
         });
         if (lastNode[ev.branch_id])
           edges.push({ from: lastNode[ev.branch_id], to: id,

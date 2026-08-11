@@ -131,6 +131,51 @@ run starts
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full design and event schema.
 
+## The evolution substrate
+
+Refinement alone plateaus: branches converge on the same well-known heuristics and
+stop producing anything new. The lab therefore runs the search as an **open evolving
+population over a real git DAG**, borrowing the mechanisms behind AlphaEvolve,
+ShinkaEvolve, the Darwin Gödel Machine, EvoGit and ReEvo:
+
+- **Git is the backbone** (`app/gitrepo.py`). Each run owns a real git repository at
+  `backend/data/runs/<id>/repo`. Every solver attempt is a commit (`solver.py` +
+  `meta.json` with the engine-verified score); every hypothesis is a git branch; a
+  supervisor merge is a true two-parent merge commit. `git log --graph` of that repo
+  *is* the run's lineage — shown in the Evolution tab.
+- **Any program can be a parent** (`app/population.py`). Darwin-Gödel-Machine rule:
+  each mutation's parent is sampled from the whole population — dead branches and past
+  runs' winners included — with probability ∝ quality × 1/(1 + children). Strong but
+  unexplored lineages get their shot; cross-lineage parents show up as merge commits.
+- **Elites are kept per behavior niche, not one global best** (MAP-Elites). Programs
+  are binned by what their tours actually *do* (edge dispersion, worst-edge ratio,
+  time use — `Problem.behavior_descriptor`), so a genuinely new algorithm opens a new
+  niche automatically, whether or not anyone can name it.
+- **The novelty gate rejects near-duplicates before they cost anything**
+  (`app/novelty.py`). Candidates are fingerprinted on canonicalized AST n-grams
+  (renaming variables doesn't fool it) and compared against everything already
+  evaluated — including the cross-run archive. Near-copies are bounced back to the
+  Experimenter with an explicit "this already exists, do something different". The
+  gate is soft: it demands one improvement, then lets the code run flagged as
+  non-novel, so a run can never wedge.
+- **Crossover is informed, not silent**. A merged branch's first experiment sees BOTH
+  parents' code plus the supervisor's reflection on why the combination should win
+  (ReEvo-style verbal gradient), under a forced `recombine` operator.
+- **A UCB1 bandit learns which mutation pays off** (`app/bandit.py`). Operators —
+  `refine`, `rewrite`, `recombine`, `explore` (deliberately break a standard
+  assumption) — are rewarded for improvement *and* for opening new niches, discounted
+  by cost. Offer several experimenter models via `MODELS_EXPERIMENTER` in `.env` and
+  the bandit arbitrates those too.
+- **Prompts show diverse inspiration**: elites from *different* niches plus one
+  deliberately odd non-elite, because diverse context is the strongest known lever on
+  diverse output.
+
+Everything is per-run configurable in `backend/app/config.py` (`enable_git_repo`,
+`enable_novelty_gate`, `novelty_threshold`, `population_parent_prob`,
+`inspiration_count`, `enable_operator_bandit`) and works identically in mock mode.
+The **Evolution tab** shows it all live: the git DAG, the niche-elite table, every
+novelty rejection, and what the bandit learned.
+
 ## Configuration
 
 Per run (UI or `POST /api/runs`): `n_cities`, `seed`, `num_hypotheses`, `max_rounds`,
@@ -164,6 +209,6 @@ Dev and held-out sets are configurable per run; defaults in
 ## Adding a new problem
 
 Implement `Problem` (`generate_instance`, `baseline`, `validate`, `evaluate`,
-`instance_stats`, `solver_contract`) in `backend/app/problems/`, register it in
-`PROBLEMS`. The engine, agents, UI graph, replay, and cost tracking all come for free;
+`instance_stats`, `solver_contract`, optionally `behavior_descriptor` for
+MAP-Elites niches) in `backend/app/problems/`, register it in `PROBLEMS`. The engine, agents, UI graph, replay, and cost tracking all come for free;
 only the result visualization (e.g. `TourCanvas`) is TSP-specific.

@@ -187,6 +187,150 @@ export function KnowledgePanel({ state }) {
   );
 }
 
+// ------------------------------------------------------------- Evolution
+// The evolution substrate: real git DAG, MAP-Elites behavior niches, the
+// operator bandit and the novelty gate — live counts while running, the
+// full summary once the run concludes.
+export function EvolutionPanel({ state }) {
+  const { evolution, git, gitCommits, noveltyRejections, populationSeeded,
+    branches } = state;
+  const pop = evolution?.population;
+  const elites = evolution?.niche_elites || [];
+  const bandit = (evolution?.bandit || []).filter((a) => a.pulls > 0);
+  const singleModel = new Set(bandit.map((a) => a.model)).size <= 1;
+  const maxReward = Math.max(...bandit.map((a) => a.mean_reward || 0), 0);
+  return (
+    <div>
+      <div className="sub" style={{ marginBottom: 10 }}>
+        The run is an evolving population over a real git DAG: any program can
+        parent the next mutation, near-duplicates are rejected before they cost
+        anything, and elites are kept per behavior niche — not just one global best.
+      </div>
+
+      <div className="panelcard">
+        <h4>Git substrate</h4>
+        {git ? (
+          <div className="kv">
+            <span className="k">repository</span>
+            <span className="v">{git.available
+              ? "every solver attempt is a real git commit" : "git unavailable — DAG disabled"}</span>
+            {git.available && (<>
+              <span className="k">commits</span><span className="v">{gitCommits}</span>
+              <span className="k">root</span>
+              <span className="v" style={{ fontFamily: "monospace" }}>
+                {(git.root_sha || "").slice(0, 7)} (baseline)</span>
+            </>)}
+          </div>
+        ) : <div className="sub">This run predates the git substrate.</div>}
+        {evolution?.git_log && (
+          <details className="promptblock" style={{ marginTop: 8 }}>
+            <summary>git log --graph (the run's full lineage DAG)</summary>
+            <pre className="code prompt">{evolution.git_log}</pre>
+          </details>
+        )}
+      </div>
+
+      <div className="panelcard">
+        <h4>Population &amp; behavior niches (MAP-Elites)</h4>
+        {populationSeeded && (
+          <div className="sub" style={{ marginBottom: 6 }}>
+            Seeded with {populationSeeded.archive_seeds || 0} elite
+            solver{(populationSeeded.archive_seeds || 0) === 1 ? "" : "s"} from
+            past runs — past winners re-enter the gene pool as parents.
+          </div>
+        )}
+        {pop ? (
+          <div className="kv">
+            <span className="k">programs</span><span className="v">{pop.programs}</span>
+            <span className="k">valid</span><span className="v">{pop.valid}</span>
+            <span className="k">behavior niches</span><span className="v">{pop.niches}</span>
+          </div>
+        ) : <div className="sub">Population summary appears when the run concludes.</div>}
+        {elites.length > 0 && (
+          <table className="htable" style={{ marginTop: 8 }}>
+            <thead>
+              <tr><th>niche (behavior)</th><th>elite program</th><th>score</th>
+                <th>operator</th><th>origin</th></tr>
+            </thead>
+            <tbody>
+              {elites.map((e) => (
+                <tr key={e.niche}>
+                  <td style={{ fontFamily: "monospace" }}>{e.niche}</td>
+                  <td>{e.name || e.id}</td>
+                  <td>{fmtScore(e.score)}</td>
+                  <td>{e.operator || "—"}</td>
+                  <td>{e.origin}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+        <div className="sub" style={{ marginTop: 6 }}>
+          Niches bin programs by what their tours actually look like (edge
+          dispersion, worst-edge ratio, time use) — a genuinely new algorithm
+          opens a new niche automatically.
+        </div>
+      </div>
+
+      <div className="panelcard">
+        <h4>Novelty gate</h4>
+        {noveltyRejections.length ? (
+          <>
+            <div className="sub" style={{ marginBottom: 6 }}>
+              {noveltyRejections.length} near-duplicate
+              {noveltyRejections.length === 1 ? "" : "s"} rejected BEFORE spending
+              evaluation budget — the Experimenter was sent back for a genuinely
+              different algorithm each time.
+            </div>
+            {noveltyRejections.map((r) => (
+              <div className="insight" key={r.seq} style={{ borderColor: "var(--purple)" }}>
+                {Math.round((r.similarity || 0) * 100)}% similar to an existing
+                program (threshold {Math.round((r.threshold || 0) * 100)}%)
+                <div className="src">
+                  {branches[r.branch_id]?.name || r.branch_id} · round {r.round}
+                  {r.nearest_program ? ` · nearest: ${String(r.nearest_program).slice(0, 7)}` : ""}
+                </div>
+              </div>
+            ))}
+          </>
+        ) : (
+          <div className="sub">
+            No near-duplicates rejected{state.results ? "" : " yet"} — every
+            proposed solver was structurally new.
+          </div>
+        )}
+      </div>
+
+      <div className="panelcard">
+        <h4>Operator bandit (UCB1)</h4>
+        {bandit.length ? (
+          <>
+            <div className="sub" style={{ marginBottom: 6 }}>
+              The lab LEARNS which mutation pays off: reward = improvement +
+              opening a new niche, discounted by cost.
+            </div>
+            {bandit.map((a) => (
+              <div className="costrow" key={a.operator + a.model}>
+                <span className="name">{a.operator}
+                  {!singleModel && <span className="sub"> · {a.model}</span>}</span>
+                <span className="bar"><div style={{
+                  width: `${maxReward ? ((a.mean_reward || 0) / maxReward) * 100 : 0}%`,
+                  background: "var(--purple)" }} /></span>
+                <span className="amt">{a.pulls}× · r̄ {a.mean_reward ?? "—"}</span>
+              </div>
+            ))}
+          </>
+        ) : (
+          <div className="sub">
+            Bandit statistics appear when the run concludes. Operators:
+            refine · rewrite · recombine · explore.
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ----------------------------------------------------------------- Cost
 function Bars({ entries, max, withAgents }) {
   return entries.map(([name, v]) => (
@@ -585,6 +729,26 @@ export function DetailPanel({ state, events, selectedSeq, onSelect }) {
                 {p.retries} (recovered before failing the round)</span></>)}
             {p.error && (<><span className="k">error</span>
               <span className="v" style={{ color: "var(--red)" }}>{p.error}</span></>)}
+            {p.operator && (<><span className="k">operator</span>
+              <span className="v">{p.operator}</span></>)}
+            {p.git_sha && (<><span className="k">git commit</span>
+              <span className="v" style={{ fontFamily: "monospace" }}>
+                {p.git_sha.slice(0, 7)}</span></>)}
+            {p.parent_program && (<><span className="k">mutated parent</span>
+              <span className="v" style={{ fontFamily: "monospace" }}>
+                {String(p.parent_program).slice(0, 7)}</span></>)}
+            {p.niche?.niche && (<><span className="k">behavior niche</span>
+              <span className="v">
+                {p.niche.niche}
+                {p.niche.new_niche
+                  ? <b style={{ color: "var(--purple)" }}> — NEW niche</b>
+                  : p.niche.became_elite ? " — new elite" : ""}</span></>)}
+            {p.novelty && p.novelty.max_similarity > 0 && (
+              <><span className="k">novelty</span>
+              <span className="v">
+                {Math.round((1 - p.novelty.max_similarity) * 100)}% structurally new
+                (closest existing program: {Math.round(p.novelty.max_similarity * 100)}% similar)
+              </span></>)}
           </div>
         </div>
         {p.detail && (
@@ -701,6 +865,8 @@ export function EventFeed({ events, selectedSeq, onSelect, state }) {
 
 function typeColor(t) {
   if (t.startsWith("experiment")) return "var(--text)";
+  if (t === "novelty.rejected") return "var(--purple)";
+  if (t.startsWith("git.") || t === "population.seeded") return "var(--muted)";
   if (t === "insight.added") return "var(--purple)";
   if (t === "branch.collapsed" || t === "run.failed") return "var(--red)";
   if (t === "branch.winner" || t === "run.completed") return "var(--gold)";
