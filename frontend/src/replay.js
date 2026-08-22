@@ -17,7 +17,6 @@ export function emptyState() {
     decisions: [],
     costs: { total: 0, byAgent: {}, byBranch: {}, calls: 0 },
     results: null,
-    originality: null, // {verdict, quadrant, ...} from the originality judge
     memory: null, // knowledge recalled from the cross-run archive
     archived: null, // what this run contributed back to the archive
     winnerBranchId: null,
@@ -30,6 +29,8 @@ export function emptyState() {
     populationSeeded: null, // archive elites + bandit config injected at start
     noveltyRejections: [], // near-duplicates bounced by the novelty gate
     evolution: null, // final evolution summary (population/niches/bandit/git log)
+    endedReason: null, // why the run stopped (budget / target / max rounds / …)
+    budgetCapped: [], // calls whose tool loop was cut short to protect the budget
     activity: {}, // key -> {agent, action, round, branch_id} of agents thinking now
     models: [], // distinct LLM models seen
     mockMode: null, // null=unknown, true=mock LLM, false=real Claude
@@ -80,9 +81,9 @@ function apply(s, ev) {
       delete s.activity["@strategist"];
       break;
     case "experiment.started": {
-      // experimenter has moved from authoring code to running it in the sandbox
+      // experimenter has moved from authoring code to benchmarking it
       const a = s.activity[ev.branch_id];
-      if (a) a.action = "running the solver in the sandbox";
+      if (a) a.action = "running the kernel through the official harness";
       break;
     }
     case "branch.created": {
@@ -182,17 +183,15 @@ function apply(s, ev) {
       s.archived = p;
       delete s.activity["@archivist"];
       break;
-    case "originality.scored":
-      delete s.activity[ev.branch_id];
-      delete s.activity["@judge"];
-      s.originality = p.error ? { error: p.error } : { ...p };
+    case "budget.capped":
+      s.budgetCapped.push({ ...p, agent: ev.agent, seq: ev.seq });
       break;
     case "run.completed":
       s.results = p.results;
       s.evolution = p.results?.evolution || null;
-      // older runs persist the verdict inside results; live runs already set it
-      if (!s.originality && p.results?.originality)
-        s.originality = p.results.originality;
+      // "run.completed" only means the engine concluded cleanly; WHY it
+      // stopped lives in ended_reason, and the run may have produced nothing
+      s.endedReason = p.results?.ended_reason || null;
       s.endedStatus = "completed";
       s.activity = {}; // nothing is thinking once the run has ended
       break;

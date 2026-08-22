@@ -32,18 +32,16 @@ class Problem(ABC):
     def solver_contract(self) -> str:
         """Prompt text describing the required solver function signature."""
 
+    @abstractmethod
     def execute(self, code: str, instance: dict, timeout_s: int) -> dict:
-        """Run agent solver code against the instance.
+        """Run agent-written code against the instance and report what happened.
 
-        Returns {"solution", "error", "exec_time", "detail"}; "detail" is an
-        optional problem-specific breakdown attached to the experiment event
-        (e.g. per-instance results for benchmark suites). The default runs the
-        code once on the whole instance.
+        Returns {"solution", "error", "exec_time", "detail"}. "solution" is
+        whatever `validate` and `evaluate` consume; "detail" is an optional
+        problem-specific breakdown attached to the experiment event (e.g.
+        per-shape benchmark results). Never trust the agent's own claim about
+        its result — everything here must come from actually running it.
         """
-        from ..sandbox import run_solver
-        out = run_solver(code, instance, timeout_s)
-        out["detail"] = None
-        return out
 
     def holdout_eval(self, code: str, instance: dict, timeout_s: int) -> dict | None:
         """Optionally evaluate the winning code on held-out data at the end of

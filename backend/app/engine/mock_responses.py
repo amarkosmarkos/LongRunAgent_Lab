@@ -1,419 +1,265 @@
 """Deterministic mock LLM: scripts the canonical demo arc.
 
-The mock replaces only the *reasoning* (LLM text). All solver code below is real,
-is really executed in the sandbox, and is really scored against the baseline —
-so mock-mode results are objectively verified, not faked.
+The mock replaces only the *reasoning* (LLM text). Every submission below is
+real, is really executed by the official GPU MODE harness, and is really
+checked for correctness and timed — so mock-mode results are objectively
+verified, not faked. Nothing here can invent a speedup the harness did not
+measure.
 
-Arc: 4 hypotheses -> random-restarts collapses (round 2) -> 2-opt and greedy/or-opt
-merge into a hybrid (round 3) -> hybrid iterated-local-search branch wins.
+Arc (on grayscale_py): the reference materialises a full-size temporary, so
+there is real headroom. A fused elementwise branch wins on small images, a
+BLAS mat-vec branch wins on large ones, the low-precision branch is rejected
+outright by the correctness gate, and the two survivors merge into a
+shape-specialised kernel that takes the best of both.
 """
 from __future__ import annotations
 
 import json
 
-# --------------------------------------------------------------- solver code
+# --------------------------------------------------------------- submissions
 
-CODE_TWO_OPT_1 = '''
-import math, time
+CODE_FUSED_1 = '''
+import torch
+from task import input_t, output_t
 
-def solve(cities):
-    n = len(cities)
-    def d(a, b):
-        return math.hypot(cities[a][0]-cities[b][0], cities[a][1]-cities[b][1])
-    # nearest-neighbor seed
-    unvisited = set(range(1, n)); tour = [0]
-    while unvisited:
-        c = tour[-1]
-        nxt = min(unvisited, key=lambda j: d(c, j))
-        unvisited.remove(nxt); tour.append(nxt)
-    # full 2-opt passes until no improvement
-    deadline = time.time() + 2.5
-    improved = True
-    while improved and time.time() < deadline:
-        improved = False
-        for i in range(1, n - 1):
-            for j in range(i + 1, n):
-                a, b = tour[i-1], tour[i]
-                c, e = tour[j], tour[(j+1) % n]
-                if d(a, c) + d(b, e) < d(a, b) + d(c, e) - 1e-9:
-                    tour[i:j+1] = reversed(tour[i:j+1])
-                    improved = True
-            if time.time() > deadline:
-                break
-    return tour
+
+def custom_kernel(data: input_t) -> output_t:
+    # The reference builds `data * weights` — a full H x W x 3 temporary — and
+    # only then reduces. Folding the weights into one fused multiply-add over
+    # the three channel planes never materialises it.
+    return data[..., 0] * 0.2989 + data[..., 1] * 0.5870 + data[..., 2] * 0.1140
 '''
 
-CODE_TWO_OPT_2 = '''
-import math, time
+CODE_FUSED_2 = '''
+import torch
+from task import input_t, output_t
 
-def solve(cities):
-    n = len(cities)
-    def d(a, b):
-        return math.hypot(cities[a][0]-cities[b][0], cities[a][1]-cities[b][1])
-    unvisited = set(range(1, n)); tour = [0]
-    while unvisited:
-        c = tour[-1]
-        nxt = min(unvisited, key=lambda j: d(c, j))
-        unvisited.remove(nxt); tour.append(nxt)
-    # 2-opt restricted to k-nearest neighbor candidate lists (faster convergence)
-    K = min(12, n - 1)
-    neigh = [sorted(range(n), key=lambda j, i=i: d(i, j))[1:K+1] for i in range(n)]
-    pos = {c: i for i, c in enumerate(tour)}
-    deadline = time.time() + 3.0
-    improved = True
-    while improved and time.time() < deadline:
-        improved = False
-        for a in range(n):
-            i = pos[a]; b = tour[(i+1) % n]
-            for c in neigh[a]:
-                j = pos[c]; e = tour[(j+1) % n]
-                if a == c or b == c or e == a:
-                    continue
-                if d(a, c) + d(b, e) < d(a, b) + d(c, e) - 1e-9:
-                    lo, hi = min(i, j), max(i, j)
-                    tour[lo+1:hi+1] = reversed(tour[lo+1:hi+1])
-                    pos = {city: idx for idx, city in enumerate(tour)}
-                    improved = True
-                    break
-        if time.time() > deadline:
-            break
-    return tour
+
+def custom_kernel(data: input_t) -> output_t:
+    # Same fusion, but unbind the channel dimension so each plane is a clean
+    # strided view and the adds chain without re-indexing.
+    r, g, b = data.unbind(-1)
+    return torch.add(torch.add(r * 0.2989, g * 0.5870), b * 0.1140)
 '''
 
-CODE_SA_1 = '''
-import math, random, time
+CODE_MATVEC_1 = '''
+import torch
+from task import input_t, output_t
 
-def solve(cities):
-    n = len(cities)
-    def d(a, b):
-        return math.hypot(cities[a][0]-cities[b][0], cities[a][1]-cities[b][1])
-    def length(t):
-        return sum(d(t[i], t[(i+1) % n]) for i in range(n))
-    rng = random.Random(7)
-    tour = list(range(n)); rng.shuffle(tour)   # random start (mistake: ignores NN seed)
-    cur = length(tour)
-    T = 10000.0
-    deadline = time.time() + 2.5
-    while T > 1 and time.time() < deadline:
-        i, j = sorted(rng.sample(range(n), 2))
-        cand = tour[:i] + tour[i:j+1][::-1] + tour[j+1:]
-        cl = length(cand)                       # O(n) eval each step: very slow
-        if cl < cur or rng.random() < math.exp((cur - cl) / T):
-            tour, cur = cand, cl
-        T *= 0.999
-    return tour
+_W = {}
+
+
+def custom_kernel(data: input_t) -> output_t:
+    # An (H*W, 3) x (3,) mat-vec is exactly this reduction, and it hands the
+    # work to the tuned GEMV path instead of a generic elementwise reduce.
+    key = (data.device, data.dtype)
+    w = _W.get(key)
+    if w is None:
+        w = torch.tensor([0.2989, 0.5870, 0.1140], device=data.device,
+                         dtype=data.dtype)
+        _W[key] = w
+    h, width = data.shape[0], data.shape[1]
+    return (data.reshape(-1, 3) @ w).view(h, width)
 '''
 
-CODE_SA_2 = '''
-import math, random, time
+CODE_MATVEC_2 = '''
+import torch
+from task import input_t, output_t
 
-def solve(cities):
-    n = len(cities)
-    def d(a, b):
-        return math.hypot(cities[a][0]-cities[b][0], cities[a][1]-cities[b][1])
-    rng = random.Random(7)
-    # start from nearest-neighbor (insight from lab knowledge)
-    unvisited = set(range(1, n)); tour = [0]
-    while unvisited:
-        c = tour[-1]
-        nxt = min(unvisited, key=lambda j: d(c, j))
-        unvisited.remove(nxt); tour.append(nxt)
-    cur = sum(d(tour[i], tour[(i+1) % n]) for i in range(n))
-    T = 80.0
-    deadline = time.time() + 3.0
-    while time.time() < deadline:
-        i, j = sorted(rng.sample(range(1, n), 2))
-        a, b = tour[i-1], tour[i]
-        c, e = tour[j], tour[(j+1) % n]
-        delta = d(a, c) + d(b, e) - d(a, b) - d(c, e)   # O(1) delta evaluation
-        if delta < 0 or rng.random() < math.exp(-delta / max(T, 1e-9)):
-            tour[i:j+1] = reversed(tour[i:j+1])
-            cur += delta
-        T *= 0.99995
-    return tour
+_W = {}
+
+
+def custom_kernel(data: input_t) -> output_t:
+    # Same mat-vec, but keep the weight vector and skip the reshape when the
+    # input is already contiguous, so no copy can sneak into the timed region.
+    key = (data.device, data.dtype)
+    w = _W.get(key)
+    if w is None:
+        w = torch.tensor([0.2989, 0.5870, 0.1140], device=data.device,
+                         dtype=data.dtype)
+        _W[key] = w
+    h, width = data.shape[0], data.shape[1]
+    flat = data.view(-1, 3) if data.is_contiguous() else data.reshape(-1, 3)
+    return torch.mv(flat, w).view(h, width)
 '''
 
-CODE_GREEDY_1 = '''
-import math
+CODE_LOWPREC_1 = '''
+import torch
+from task import input_t, output_t
 
-def solve(cities):
-    n = len(cities)
-    def d(a, b):
-        return math.hypot(cities[a][0]-cities[b][0], cities[a][1]-cities[b][1])
-    # greedy edge construction with union-find (no subtours, degree <= 2)
-    edges = sorted(((d(i, j), i, j) for i in range(n) for j in range(i+1, n)))
-    parent = list(range(n))
-    def find(x):
-        while parent[x] != x:
-            parent[x] = parent[parent[x]]; x = parent[x]
-        return x
-    deg = [0] * n
-    adj = [[] for _ in range(n)]
-    count = 0
-    for w, i, j in edges:
-        if count == n - 1:
-            break
-        if deg[i] < 2 and deg[j] < 2 and find(i) != find(j):
-            parent[find(i)] = find(j)
-            adj[i].append(j); adj[j].append(i)
-            deg[i] += 1; deg[j] += 1; count += 1
-    ends = [i for i in range(n) if deg[i] < 2]
-    adj[ends[0]].append(ends[1]); adj[ends[1]].append(ends[0])
-    tour, prev, cur = [0], None, 0
-    while len(tour) < n:
-        nxt = adj[cur][0] if adj[cur][0] != prev else adj[cur][1]
-        tour.append(nxt); prev, cur = cur, nxt
-    return tour
+
+def custom_kernel(data: input_t) -> output_t:
+    # Hypothesis: this kernel is bandwidth-bound, so halving the bytes read
+    # should nearly halve the runtime.
+    h = data.half()
+    w = torch.tensor([0.2989, 0.5870, 0.1140], device=data.device,
+                     dtype=torch.float16)
+    return torch.sum(h * w, dim=-1).float()
 '''
 
-CODE_GREEDY_2 = '''
-import math, time
+CODE_LOWPREC_2 = '''
+import torch
+from task import input_t, output_t
 
-def solve(cities):
-    n = len(cities)
-    def d(a, b):
-        return math.hypot(cities[a][0]-cities[b][0], cities[a][1]-cities[b][1])
-    edges = sorted(((d(i, j), i, j) for i in range(n) for j in range(i+1, n)))
-    parent = list(range(n))
-    def find(x):
-        while parent[x] != x:
-            parent[x] = parent[parent[x]]; x = parent[x]
-        return x
-    deg = [0] * n
-    adj = [[] for _ in range(n)]
-    count = 0
-    for w, i, j in edges:
-        if count == n - 1:
-            break
-        if deg[i] < 2 and deg[j] < 2 and find(i) != find(j):
-            parent[find(i)] = find(j)
-            adj[i].append(j); adj[j].append(i)
-            deg[i] += 1; deg[j] += 1; count += 1
-    ends = [i for i in range(n) if deg[i] < 2]
-    adj[ends[0]].append(ends[1]); adj[ends[1]].append(ends[0])
-    tour, prev, cur = [0], None, 0
-    while len(tour) < n:
-        nxt = adj[cur][0] if adj[cur][0] != prev else adj[cur][1]
-        tour.append(nxt); prev, cur = cur, nxt
-    # or-opt: relocate segments of length 1-3
-    deadline = time.time() + 2.5
-    improved = True
-    while improved and time.time() < deadline:
-        improved = False
-        for seg in (1, 2, 3):
-            for i in range(n - seg):
-                a = tour[i-1]; b = tour[i]; c = tour[i+seg-1]; e = tour[(i+seg) % n]
-                removed = d(a, b) + d(c, e) - d(a, e)
-                for k in range(n):
-                    if i - 1 <= k <= i + seg - 1:
-                        continue
-                    p, q = tour[k], tour[(k+1) % n]
-                    gain = removed - (d(p, b) + d(c, q) - d(p, q))
-                    if gain > 1e-9:
-                        segment = tour[i:i+seg]
-                        rest = tour[:i] + tour[i+seg:]
-                        kk = rest.index(p)
-                        tour = rest[:kk+1] + segment + rest[kk+1:]
-                        improved = True
-                        break
-                if improved:
-                    break
-            if improved or time.time() > deadline:
-                break
-    return tour
+
+def custom_kernel(data: input_t) -> output_t:
+    # Less aggressive: read in bf16 but accumulate the weighted sum in fp32.
+    b = data.bfloat16()
+    return (b[..., 0].float() * 0.2989 + b[..., 1].float() * 0.5870
+            + b[..., 2].float() * 0.1140)
 '''
 
-CODE_RANDOM_1 = '''
-import math, random, time
+CODE_EINSUM_1 = '''
+import torch
+from task import input_t, output_t
 
-def solve(cities):
-    n = len(cities)
-    def length(t):
-        return sum(math.hypot(cities[t[i]][0]-cities[t[(i+1)%n]][0],
-                              cities[t[i]][1]-cities[t[(i+1)%n]][1]) for i in range(n))
-    rng = random.Random(1)
-    best, best_len = None, float("inf")
-    deadline = time.time() + 2.0
-    while time.time() < deadline:
-        t = list(range(n)); rng.shuffle(t)
-        l = length(t)
-        if l < best_len:
-            best, best_len = t, l
-    return best
+
+def custom_kernel(data: input_t) -> output_t:
+    # Let the einsum planner pick the contraction order and backend.
+    w = torch.tensor([0.2989, 0.5870, 0.1140], device=data.device,
+                     dtype=data.dtype)
+    return torch.einsum("hwc,c->hw", data, w)
 '''
 
-CODE_RANDOM_2 = '''
-import math, random, time
+CODE_EINSUM_2 = '''
+import torch
+from task import input_t, output_t
 
-def solve(cities):
-    n = len(cities)
-    def length(t):
-        return sum(math.hypot(cities[t[i]][0]-cities[t[(i+1)%n]][0],
-                              cities[t[i]][1]-cities[t[(i+1)%n]][1]) for i in range(n))
-    rng = random.Random(2)
-    best, best_len = None, float("inf")
-    deadline = time.time() + 2.0
-    while time.time() < deadline:
-        t = list(range(n)); rng.shuffle(t)
-        # one greedy swap pass (still fundamentally random sampling)
-        for _ in range(50):
-            i, j = rng.sample(range(n), 2)
-            t[i], t[j] = t[j], t[i]
-        l = length(t)
-        if l < best_len:
-            best, best_len = t, l
-    return best
+_W = {}
+
+
+def custom_kernel(data: input_t) -> output_t:
+    # Adopt the lab insight that rebuilding the weight tensor shows up in the
+    # measured window at small sizes, and cache it.
+    key = (data.device, data.dtype)
+    w = _W.get(key)
+    if w is None:
+        w = torch.tensor([0.2989, 0.5870, 0.1140], device=data.device,
+                         dtype=data.dtype)
+        _W[key] = w
+    return torch.einsum("hwc,c->hw", data, w)
 '''
 
-CODE_HYBRID_1 = '''
-import math, random, time
+CODE_MERGED_1 = '''
+import torch
+from task import input_t, output_t
 
-def solve(cities):
-    n = len(cities)
-    def d(a, b):
-        return math.hypot(cities[a][0]-cities[b][0], cities[a][1]-cities[b][1])
-    def length(t):
-        return sum(d(t[i], t[(i+1) % n]) for i in range(n))
-    rng = random.Random(11)
+_W = {}
+# Below this many pixels the fused elementwise form wins; above it the GEMV
+# path amortises its setup and pulls ahead. Measured, not guessed.
+_CROSSOVER = 1_000_000
 
-    def nn_tour():
-        unvisited = set(range(1, n)); t = [0]
-        while unvisited:
-            c = t[-1]
-            nxt = min(unvisited, key=lambda j: d(c, j))
-            unvisited.remove(nxt); t.append(nxt)
-        return t
 
-    def two_opt(t, deadline):
-        improved = True
-        while improved and time.time() < deadline:
-            improved = False
-            for i in range(1, n - 1):
-                for j in range(i + 1, n):
-                    a, b = t[i-1], t[i]
-                    c, e = t[j], t[(j+1) % n]
-                    if d(a, c) + d(b, e) < d(a, b) + d(c, e) - 1e-9:
-                        t[i:j+1] = reversed(t[i:j+1])
-                        improved = True
-                if time.time() > deadline:
-                    break
-        return t
-
-    def or_opt(t, deadline):
-        improved = True
-        while improved and time.time() < deadline:
-            improved = False
-            for seg in (1, 2, 3):
-                for i in range(1, n - seg):
-                    a, b = t[i-1], t[i]
-                    c, e = t[i+seg-1], t[(i+seg) % n]
-                    removed = d(a, b) + d(c, e) - d(a, e)
-                    if removed <= 1e-9:
-                        continue
-                    for k in range(n - 1):
-                        if i - 1 <= k <= i + seg - 1:
-                            continue
-                        p, q = t[k], t[k+1]
-                        if removed - (d(p, b) + d(c, q) - d(p, q)) > 1e-9:
-                            segment = t[i:i+seg]
-                            rest = t[:i] + t[i+seg:]
-                            kk = rest.index(p)
-                            t = rest[:kk+1] + segment + rest[kk+1:]
-                            improved = True
-                            break
-                    if improved:
-                        break
-                if improved:
-                    break
-        return t
-
-    def double_bridge(t):
-        a, b, c = sorted(rng.sample(range(1, n), 3))
-        return t[:a] + t[c:] + t[b:c] + t[a:b]
-
-    deadline = time.time() + 5.0
-    best = two_opt(nn_tour(), time.time() + 1.5)
-    best = or_opt(best, time.time() + 1.0)
-    best_len = length(best)
-    # iterated local search: perturb (double bridge) + re-optimize
-    while time.time() < deadline:
-        cand = double_bridge(best[:])
-        cand = two_opt(cand, min(deadline, time.time() + 0.8))
-        cand = or_opt(cand, min(deadline, time.time() + 0.4))
-        cl = length(cand)
-        if cl < best_len:
-            best, best_len = cand, cl
-    return best
+def custom_kernel(data: input_t) -> output_t:
+    h, width = data.shape[0], data.shape[1]
+    if h * width <= _CROSSOVER:
+        return data[..., 0] * 0.2989 + data[..., 1] * 0.5870 + data[..., 2] * 0.1140
+    key = (data.device, data.dtype)
+    w = _W.get(key)
+    if w is None:
+        w = torch.tensor([0.2989, 0.5870, 0.1140], device=data.device,
+                         dtype=data.dtype)
+        _W[key] = w
+    flat = data.view(-1, 3) if data.is_contiguous() else data.reshape(-1, 3)
+    return torch.mv(flat, w).view(h, width)
 '''
 
-CODE_HYBRID_2 = CODE_HYBRID_1.replace("time.time() + 5.0", "time.time() + 7.0") \
-                             .replace("random.Random(11)", "random.Random(13)")
+CODE_MERGED_2 = '''
+import torch
+from task import input_t, output_t
 
-# ------------------------------------------------------------ scripted text
+_W = {}
+_CROSSOVER = 4_000_000
+
+
+def custom_kernel(data: input_t) -> output_t:
+    # Push the crossover up: the fused form keeps winning further than the
+    # first estimate suggested, so give it more of the range.
+    h, width = data.shape[0], data.shape[1]
+    if h * width <= _CROSSOVER:
+        r, g, b = data.unbind(-1)
+        return torch.add(torch.add(r * 0.2989, g * 0.5870), b * 0.1140)
+    key = (data.device, data.dtype)
+    w = _W.get(key)
+    if w is None:
+        w = torch.tensor([0.2989, 0.5870, 0.1140], device=data.device,
+                         dtype=data.dtype)
+        _W[key] = w
+    flat = data.view(-1, 3) if data.is_contiguous() else data.reshape(-1, 3)
+    return torch.mv(flat, w).view(h, width)
+'''
+
+# ------------------------------------------------------------------ script
 
 _HYPOTHESES = [
-    {"name": "2-opt local search", "strategy": "two-opt",
-     "hypothesis": "A nearest-neighbor tour contains crossing edges; iteratively reversing segments (2-opt) will remove them and shorten the tour well below baseline.",
-     "risk": "2-opt converges to a local optimum and may stall."},
-    {"name": "Simulated annealing", "strategy": "simulated-annealing",
-     "hypothesis": "Accepting some worse moves with decreasing probability escapes local optima that trap greedy local search, yielding better tours than pure descent.",
-     "risk": "Highly sensitive to temperature schedule; may waste the time budget."},
-    {"name": "Greedy edge + or-opt", "strategy": "greedy-construction",
-     "hypothesis": "Building the tour from globally shortest edges (instead of a greedy walk) gives a stronger starting structure, improvable by relocating short segments (or-opt).",
-     "risk": "Greedy matching can create long 'closing' edges that local moves cannot fix."},
-    {"name": "Random restarts", "strategy": "random-restarts",
-     "hypothesis": "Sampling many random tours and keeping the best will eventually find good structure through sheer volume.",
-     "risk": "The space of tours is factorially large; sampling may never reach baseline quality."},
+    {"name": "Fused elementwise", "strategy": "fused-elementwise",
+     "hypothesis": "The reference materialises a full H x W x 3 temporary before reducing it; folding the weights into a single multiply-add over the three channel planes removes that whole array from the traffic and should be substantially faster.",
+     "risk": "Three strided plane reads may coalesce worse than one contiguous pass over the packed tensor."},
+    {"name": "BLAS mat-vec", "strategy": "blas-matvec",
+     "hypothesis": "Reducing over the channel axis is exactly an (H*W, 3) x (3,) mat-vec, so reshaping and calling GEMV hands the work to a tuned kernel instead of a generic elementwise reduction.",
+     "risk": "The reshape may force a copy, and GEMV setup could dominate at small image sizes."},
+    {"name": "Low precision", "strategy": "low-precision",
+     "hypothesis": "This kernel is bandwidth-bound, so reading the image in half precision should nearly halve the time.",
+     "risk": "The correctness tolerance is tight enough that fp16 rounding may be rejected outright."},
+    {"name": "Einsum contraction", "strategy": "einsum",
+     "hypothesis": "Expressing the reduction as an einsum lets the contraction planner choose the backend and ordering rather than fixing one by hand.",
+     "risk": "einsum may simply dispatch to the same generic reduction, adding parsing overhead for nothing."},
 ]
 
 _EXPERIMENTS = {
-    ("two-opt", 1): ("Seed with nearest-neighbor, then run full 2-opt passes until convergence.",
-                     CODE_TWO_OPT_1),
-    ("two-opt", 2): ("Restrict 2-opt to 12-nearest-neighbor candidate lists for faster convergence within the time cap.",
-                     CODE_TWO_OPT_2),
-    ("simulated-annealing", 1): ("Classic SA from a random tour, geometric cooling from T=10000, full-length re-evaluation per move.",
-                                 CODE_SA_1),
-    ("simulated-annealing", 2): ("Adopt lab insight: start from NN tour, O(1) delta evaluation for 2-opt moves, low initial temperature.",
-                                 CODE_SA_2),
-    ("greedy-construction", 1): ("Greedy edge construction with union-find to avoid subtours and degree>2.",
-                                 CODE_GREEDY_1),
-    ("greedy-construction", 2): ("Add or-opt: relocate segments of 1-3 cities to repair long edges left by greedy matching.",
-                                 CODE_GREEDY_2),
-    ("random-restarts", 1): ("Sample random permutations for 2 seconds, keep the best.",
-                             CODE_RANDOM_1),
-    ("random-restarts", 2): ("Add a random swap pass per sample; still volume-based search.",
-                             CODE_RANDOM_2),
-    ("hybrid-merge", 1): ("Combine merged insights: NN seed -> 2-opt -> or-opt, then iterated local search with double-bridge perturbation.",
-                          CODE_HYBRID_1),
-    ("hybrid-merge", 2): ("Extend ILS time budget and reseed perturbation RNG; keep best-of-all-restarts.",
-                          CODE_HYBRID_2),
+    ("fused-elementwise", 1): ("Fold the three weights into one fused multiply-add over the channel planes, never building the temporary.",
+                               CODE_FUSED_1),
+    ("fused-elementwise", 2): ("Unbind the channel dimension so each plane is a clean strided view and the adds chain directly.",
+                               CODE_FUSED_2),
+    ("blas-matvec", 1): ("Reshape to (H*W, 3) and multiply by the cached weight vector, dispatching to GEMV.",
+                         CODE_MATVEC_1),
+    ("blas-matvec", 2): ("Use torch.mv on a view instead of a reshape so no copy enters the timed region.",
+                         CODE_MATVEC_2),
+    ("low-precision", 1): ("Downcast the image to fp16 and reduce there to halve the bytes read.",
+                           CODE_LOWPREC_1),
+    ("low-precision", 2): ("Read in bf16 but accumulate the weighted sum in fp32 to recover accuracy.",
+                           CODE_LOWPREC_2),
+    ("einsum", 1): ("Express the channel reduction as an einsum contraction.",
+                    CODE_EINSUM_1),
+    ("einsum", 2): ("Adopt the lab insight and cache the weight tensor across calls.",
+                    CODE_EINSUM_2),
+    ("merged", 1): ("Specialise by size: fused elementwise below the measured crossover, GEMV above it.",
+                    CODE_MERGED_1),
+    ("merged", 2): ("Raise the crossover — the fused form keeps winning further up the range than first estimated.",
+                    CODE_MERGED_2),
 }
 
 _INSIGHTS = {
-    ("two-opt", 1): "2-opt removes edge crossings fast but stalls in a local optimum; perturbation (e.g. double-bridge) plus re-optimization should escape it.",
-    ("two-opt", 2): None,
-    ("simulated-annealing", 1): "Random starting tours and O(n) move evaluation waste the entire time budget; always seed with a constructive heuristic and use O(1) delta evaluation.",
-    ("simulated-annealing", 2): None,
-    ("greedy-construction", 1): "Greedy edge construction beats greedy-walk construction, but leaves a few long edges that 2-opt-style reversals cannot fix.",
-    ("greedy-construction", 2): "Or-opt segment relocation (1-3 cities) repairs exactly the long-edge defects that 2-opt misses; the two moves are complementary.",
-    ("random-restarts", 1): None,
-    ("random-restarts", 2): None,
-    ("hybrid-merge", 1): "Alternating 2-opt and or-opt inside an iterated local search compounds both moves' strengths.",
-    ("hybrid-merge", 2): None,
+    ("fused-elementwise", 1): "The reference's cost is dominated by materialising the H x W x 3 product before reducing it; any formulation that never writes that temporary wins immediately, and the margin is largest at small sizes where allocation is a big share of the time.",
+    ("fused-elementwise", 2): None,
+    ("blas-matvec", 1): "Rebuilding the weight tensor on every call is measurable at small sizes — hoist any per-call allocation to module scope and key it by device and dtype.",
+    ("blas-matvec", 2): "The GEMV path has a fixed setup cost but far better large-size scaling than the elementwise form, so which formulation is fastest depends on the shape rather than being a single global winner.",
+    ("low-precision", 1): "Reducing precision below the reference's is not a speed/accuracy trade-off here, it is a hard failure: the correctness gate rejects the kernel outright, so the experiment scores nothing at all.",
+    ("low-precision", 2): None,
+    ("einsum", 1): "einsum dispatches to the same generic reduction as the reference and adds its own parsing overhead; it is a rewrite, not an optimisation.",
+    ("einsum", 2): None,
+    ("merged", 1): "Because the two survivors win at opposite ends of the shape range, dispatching on size beats either of them alone — the crossover point is worth measuring rather than guessing.",
+    ("merged", 2): None,
 }
 
 
 def mock_call(role: str, ctx: dict) -> str:
     if role == "researcher":
-        return ("State-of-the-art for Euclidean TSP at this size:\n"
-                "- Lin-Kernighan-Helsgaun (LKH) reaches ~0% gap in seconds; the "
-                "practical gold standard.\n"
-                "- Or-opt + 2-opt inside an iterated local search with double-bridge "
-                "perturbation typically lands within ~1-3% of optimum in a few seconds.\n"
-                "- Candidate lists (k-nearest) and don't-look bits are essential for "
-                "speed on larger instances.\n"
-                "- Pitfall: unbounded local search times out; always keep a wall-clock "
-                "budget and return the best-so-far.")
+        return ("State of the art for an RGB-to-grayscale reduction:\n"
+                "- The operation is purely bandwidth-bound; the roofline is one "
+                "read of the image plus one write of the output, so the target is "
+                "to touch each byte exactly once.\n"
+                "- The naive form (weights broadcast, then reduce) materialises a "
+                "full-size intermediate and therefore moves ~2x the necessary "
+                "traffic — fusing the weighted sum is the single biggest win.\n"
+                "- Vectorised loads (float4 / packed 128-bit accesses) and reading "
+                "the packed RGB layout contiguously matter more than any "
+                "arithmetic change.\n"
+                "- A channel reduction of width 3 can also be expressed as a GEMV, "
+                "which reaches tuned library bandwidth at large sizes.\n"
+                "- Pitfall: the correctness tolerance does not absorb a precision "
+                "downgrade, so reading in fp16 fails the check rather than "
+                "trading accuracy for speed.")
 
     if role == "planner" and ctx.get("review"):
         # planner reviews the round; the mock keeps the demo arc stable by not
@@ -426,22 +272,24 @@ def mock_call(role: str, ctx: dict) -> str:
 
     if role == "planner":
         cfg = ctx.get("config", {})
+        target = cfg.get("target_improvement_pct", 18.0)
         return json.dumps({
             "initial_hypotheses": cfg.get("num_hypotheses", 4),
-            "objective": "Find a closed tour at least {:.0f}% shorter than the nearest-neighbor baseline on this instance.".format(cfg.get("target_improvement_pct", 18)),
+            "objective": "Produce a correct custom_kernel at least {:.0f}% faster than the reference submission across the benchmark shapes.".format(target),
             "success_criteria": {
-                "target_improvement_pct": cfg.get("target_improvement_pct", 18.0),
-                "rationale": "Nearest-neighbor is typically 20-25% above optimal on uniform instances. A target near {:.0f}% is close to the optimality gap: no single basic heuristic should reach it, so it forces combining discoveries.".format(cfg.get("target_improvement_pct", 18.0))},
+                "target_improvement_pct": target,
+                "rationale": "The reference is a naive two-pass formulation that materialises a full-size temporary, so a fused implementation should clear {:.0f}% comfortably. The real question is whether one formulation wins across the whole shape range or the lab has to specialise.".format(target)},
             "constraints": [
-                f"Each experiment must finish within {cfg.get('experiment_timeout_s', 10)}s",
-                "Solvers must be pure Python (stdlib only), single-threaded, no I/O",
-                "Every reported score is re-verified by the engine, never trusted from agents"],
+                "Every submission must pass the official correctness check on all test shapes before it is timed",
+                f"One harness invocation must finish within {cfg.get('experiment_timeout_s', 180)}s, including any JIT compilation",
+                "Only submission.py may change; reference.py, task.py and eval.py are fixed",
+                "Timings come from the official harness, never from the agent"],
             "stop_conditions": [
                 f"Budget of ${cfg.get('budget_usd', 2.0)} USD exhausted",
                 f"{cfg.get('max_rounds', 5)} rounds completed",
-                "Target improvement reached and confirmed",
+                "Target speedup reached and confirmed on held-out shapes",
                 "All branches collapsed"],
-            "reasoning": "With ~60 cities, exact methods are infeasible in seconds, but strong heuristics (local search, metaheuristics, better construction) routinely beat nearest-neighbor by 10-20%. A staged exploration of diverse strategies with knowledge sharing should reach the target.",
+            "reasoning": "This kernel is bandwidth-bound, so the wins come from moving fewer bytes rather than from cleverer arithmetic. Exploring fusion, a library GEMV path, precision and a contraction planner in parallel covers the plausible strategies; whichever survive can then be combined.",
         })
 
     if role == "strategist":
@@ -450,9 +298,9 @@ def mock_call(role: str, ctx: dict) -> str:
 
     if role == "experimenter":
         key = (ctx.get("strategy"), min(ctx.get("attempt", 1), 2))
-        approach, code = _EXPERIMENTS.get(key, _EXPERIMENTS[("two-opt", 1)])
+        approach, code = _EXPERIMENTS.get(key, _EXPERIMENTS[("fused-elementwise", 1)])
         return json.dumps({"approach": approach,
-                           "expectation": "Lower tour length than this branch's previous best."}) \
+                           "expectation": "Lower measured runtime than this branch's previous best, with correctness preserved."}) \
             + "\n```python\n" + code + "\n```"
 
     if role == "critic":
@@ -461,18 +309,23 @@ def mock_call(role: str, ctx: dict) -> str:
         error = ctx.get("error")
         improved = ctx.get("improved", False)
         beats_baseline = ctx.get("beats_baseline", False)
-        if error:
+        if error and "incorrect" in str(error).lower():
+            verdict, analysis = "failed", (
+                f"Rejected by the correctness gate: {error}. Speed is irrelevant "
+                "until the output matches the reference — this direction has to "
+                "recover accuracy before it can be timed at all.")
+        elif error:
             verdict, analysis = "failed", f"The experiment failed: {error}. The implementation, not the hypothesis, is at fault; fix and retry."
         elif improved and beats_baseline:
-            verdict, analysis = "improved", "The change produced a measurably shorter tour than both the branch's previous best and the baseline, supporting the hypothesis."
+            verdict, analysis = "improved", "The kernel is measurably faster than both the branch's previous best and the reference, while still passing every correctness shape."
         elif improved:
-            verdict, analysis = "improved", "Improvement over the branch's previous attempt, but still above the baseline; the direction works yet needs more strength."
+            verdict, analysis = "improved", "Faster than this branch's previous attempt but still slower than the reference; the direction works yet is not competitive."
         else:
-            verdict, analysis = "no_improvement", "No measurable gain. The search either wastes its time budget or explores unstructured regions of the solution space."
+            verdict, analysis = "no_improvement", "No measurable gain over the branch's best. The change did not move the bottleneck the measurement is dominated by."
         insight = _INSIGHTS.get((strategy, attempt))
         return json.dumps({
             "verdict": verdict, "analysis": analysis, "insight": insight,
-            "suggestion": "Incorporate shared lab insights and tighten the inner-loop time budget." })
+            "suggestion": "Apply the shared lab insights and target whatever dominates the measured time, not what looks slow in the source."})
 
     if role == "supervisor":
         rnd = ctx.get("round", 1)
@@ -480,21 +333,26 @@ def mock_call(role: str, ctx: dict) -> str:
         by_strategy = {b["strategy"]: b for b in branches if b["status"] == "active"}
         decision = {"collapse": [], "merge": None,
                     "reasoning": "Branches are still differentiating; everyone continues."}
-        if rnd >= 2 and "random-restarts" in by_strategy:
-            b = by_strategy["random-restarts"]
+        if rnd >= 2 and "low-precision" in by_strategy:
+            b = by_strategy["low-precision"]
             decision["collapse"].append({
                 "branch_id": b["id"],
-                "reason": "Two rounds without approaching baseline: random sampling cannot compete in a factorial space. Evidence: best score far above baseline while every other branch improved."})
-            decision["reasoning"] = "Random restarts is clearly dominated and is collapsed to stop spending budget on it."
-        if rnd >= 3 and "two-opt" in by_strategy and "greedy-construction" in by_strategy:
-            a, b = by_strategy["two-opt"], by_strategy["greedy-construction"]
+                "reason": "Two rounds rejected by the correctness gate: the reference's accuracy is a hard floor, so trading mantissa bits for bandwidth can never score here. Evidence: no valid timing produced while every other branch was measured."})
+            decision["reasoning"] = "Low precision is structurally incompatible with the correctness gate and is collapsed to stop spending budget on it."
+        if rnd >= 2 and "einsum" in by_strategy:
+            b = by_strategy["einsum"]
+            decision["collapse"].append({
+                "branch_id": b["id"],
+                "reason": "Dominated by both surviving branches at every shape: einsum dispatches to the same generic reduction as the reference, so it is a rewrite rather than an optimisation."})
+        if rnd >= 3 and "fused-elementwise" in by_strategy and "blas-matvec" in by_strategy:
+            a, b = by_strategy["fused-elementwise"], by_strategy["blas-matvec"]
             decision["merge"] = {
                 "source_ids": [a["id"], b["id"]],
-                "name": "Hybrid ILS (2-opt + or-opt)",
-                "hypothesis": "2-opt and or-opt fix complementary defects (crossings vs misplaced segments); alternating them inside an iterated local search with double-bridge perturbation escapes the local optima where each stalls alone.",
-                "strategy": "hybrid-merge",
-                "reason": "Branch insights are complementary: 2-opt stalls at local optima needing perturbation; or-opt repairs exactly the defects 2-opt cannot. Merging concentrates the remaining budget on the combination."}
-            decision["reasoning"] = "The two strongest branches discovered complementary moves; merging them is the highest-expected-value use of remaining budget."
+                "name": "Shape-specialised grayscale",
+                "hypothesis": "The fused form wins at small sizes and the GEMV path wins at large ones, so a kernel that dispatches on pixel count beats either branch across the whole benchmark range.",
+                "strategy": "merged",
+                "reason": "These two are not competing implementations of the same idea — they win at opposite ends of the shape range. Neither dominates, so the highest-value move is to combine them behind a size check rather than pick one."}
+            decision["reasoning"] = "The two survivors win on disjoint parts of the shape range; merging them captures both wins instead of discarding one."
         return json.dumps(decision)
 
     return "{}"

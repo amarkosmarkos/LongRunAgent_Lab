@@ -32,24 +32,26 @@ MAX_INSIGHTS = 300          # FIFO cap on the cross-run insight pool
 RECALL_SOLVERS = 5          # elites surfaced to the planner/strategist
 RECALL_INSIGHTS = 8         # insights surfaced to the planner/strategist
 
-# keyword -> technique tag; a solver's niche is the SET of techniques it uses,
-# so "2-opt alone" and "2-opt + or-opt + annealing" occupy different niches
+# keyword -> technique tag; a kernel's niche is the SET of techniques it uses,
+# so "plain Triton tiling" and "Triton tiling + tensor cores + fused epilogue"
+# occupy different niches
 _TECHNIQUE_RULES = [
-    (r"christofides", "christofides"),
-    (r"lin[-_ ]?kernighan|lk[-_ ]?move|\blkh\b", "lin-kernighan"),
-    (r"or[-_ ]?opt", "or-opt"),
-    (r"3[-_ ]?opt", "3-opt"),
-    (r"2[-_ ]?opt", "2-opt"),
-    (r"anneal|temperature|cooling", "simulated-annealing"),
-    (r"pheromone|ant[-_ ]colony|\baco\b", "ant-colony"),
-    (r"genetic|crossover|mutation|population", "genetic"),
-    (r"tabu", "tabu-search"),
-    (r"convex[-_ ]?hull", "convex-hull"),
-    (r"insertion", "insertion"),
-    (r"greedy[-_ ]?edge|greedy", "greedy"),
-    (r"nearest[-_ ]?neigh|nearest", "nearest-neighbour"),
-    (r"segment[-_ ]?revers|perturb|restart|kick", "perturbation"),
-    (r"candidate[-_ ]?list|k[-_ ]?nearest|neighbor[-_ ]?list", "candidate-lists"),
+    (r"cutlass", "cutlass"),
+    (r"cpp_extension|load_inline|__global__|nvcc", "inline-cuda"),
+    (r"\btriton\b|tl\.load|@triton", "triton"),
+    (r"wmma|mma\.sync|tensor[-_ ]?core|tf32|allow_tf32", "tensor-cores"),
+    (r"autotune|num_warps|num_stages|configs?\s*=", "autotuning"),
+    (r"tl\.dot|block_m|block_n|block_k|tile", "tiling"),
+    (r"shared|smem|tl\.static|__shared__", "shared-memory"),
+    (r"swizzl|group_m|reorder|l2[-_ ]?cache", "swizzling"),
+    (r"coalesc|vectoriz|float4|\.reshape\(.*4\)", "vectorised-loads"),
+    (r"warp|shfl|reduce_sync|__syncwarp", "warp-level"),
+    (r"fuse|epilogue|bias\s*\+|activation", "fusion"),
+    (r"half|float16|bfloat16|fp16|bf16|amp", "low-precision"),
+    (r"contiguous|stride|transpose|permute", "layout"),
+    (r"torch\.compile|inductor", "torch-compile"),
+    (r"cublas|cudnn|scaled_mm|\bbmm\b|addmm", "vendor-library"),
+    (r"if\s+m\s*[<>=]|shape\s*==|specializ", "shape-specialisation"),
 ]
 _TECHNIQUE_RES = [(re.compile(pat, re.IGNORECASE), tag) for pat, tag in _TECHNIQUE_RULES]
 
@@ -167,8 +169,7 @@ class KnowledgeArchive:
                 incumbent = self._data["solvers"].get(niche)
                 # MAP-Elites rule: the niche keeps only its best solver
                 if incumbent is None or imp > incumbent.get("improvement_pct", -1e9):
-                    orig = ((results.get("originality") or {}).get("verdict")
-                            or {})
+                    holdout = (results.get("holdout") or {}).get("summary") or {}
                     self._data["solvers"][niche] = {
                         "run_id": run_id,
                         "problem": problem,
@@ -176,11 +177,8 @@ class KnowledgeArchive:
                         "techniques": tags,
                         "score": results.get("best_score"),
                         "improvement_pct": imp,
-                        "holdout_generalizes": ((results.get("holdout") or {})
-                                                .get("summary") or {}).get("generalizes"),
-                        "originality": orig.get("originality"),
-                        "mechanism": orig.get("mechanism"),
-                        "quadrant": (results.get("originality") or {}).get("quadrant"),
+                        "holdout_generalizes": holdout.get("generalizes"),
+                        "holdout_speedup": holdout.get("mean_speedup"),
                         "code": code,
                     }
                     outcome["solver_added"] = True
@@ -246,13 +244,11 @@ class KnowledgeArchive:
         for s in recall.get("solvers", []):
             bits = [f"- \"{s.get('name')}\" [{'+'.join(s.get('techniques') or []) or 'unclassified'}]",
                     f"improved {s.get('improvement_pct')}% over baseline"]
-            if s.get("originality") is not None:
-                bits.append(f"originality {s['originality']}/10")
             if s.get("holdout_generalizes") is not None:
                 bits.append("generalizes" if s["holdout_generalizes"]
-                            else "does NOT generalize on held-out instances")
-            if s.get("mechanism"):
-                bits.append(f"mechanism: {s['mechanism']}")
+                            else "does NOT generalize on held-out shapes")
+            if s.get("holdout_speedup"):
+                bits.append(f"held-out speedup {s['holdout_speedup']}x")
             lines.append("; ".join(bits))
         if recall.get("insights"):
             lines.append("Transferable insights from past runs:")

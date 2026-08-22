@@ -105,14 +105,25 @@ function tooltipFor(n, branches) {
   }
 }
 
-export default function BranchGraph({ graph, branches, activity, selectedSeq, onSelect }) {
+export default function BranchGraph({ graph, branches, activity, selectedSeq,
+  onSelect, endedReason }) {
   const { nodes, edges, lanes, branchMeta } = graph;
   const [tip, setTip] = useState(null); // {x, y, title, lines}
   // agents currently thinking -> ghost nodes at the graph's growing edge, so
   // work is visible while it happens instead of nodes popping in when finished
   const ghosts = Object.values(activity || {});
   if (!nodes.length && !ghosts.length)
-    return <div className="empty">Waiting for the run to produce events…</div>;
+    // an ended run with no nodes never got as far as an experiment — say so,
+    // rather than implying work is still on its way
+    return (
+      <div className="empty">
+        {endedReason
+          ? `This run ended before any experiment ran — ${endedReason}. ` +
+            "There is nothing to draw; see the Story and Costs tabs for what " +
+            "it did spend."
+          : "Waiting for the run to produce events…"}
+      </div>
+    );
 
   const byId = Object.fromEntries(nodes.map((n) => [n.id, n]));
   const numLanes = Math.max(1, Object.keys(lanes).length);

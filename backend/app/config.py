@@ -44,8 +44,26 @@ AGENT_MODELS = {
 MAX_OUTPUT_TOKENS = 16000
 
 DEFAULT_RUN_CONFIG = {
-    "problem": "tsp",
-    "problem_params": {"n_cities": 60, "seed": 42},
+    "problem": "gpu_kernel",
+    "problem_params": {
+        # Which vendored GPU MODE reference-kernel to optimize.
+        # grayscale_py is the default because its correctness tolerance
+        # (rtol/atol 1e-4 on fp32) leaves room for a genuinely different
+        # implementation, and its reference materialises a full-size temporary,
+        # so there is real headroom to win. conv2d_py (rtol 1e-3) is the other
+        # good target on a real GPU. NOTE: matmul_py is vendored but its
+        # tolerance (rtol 1e-5 on fp16) is ~100x tighter than one fp16 ULP, so
+        # only a bit-identical accumulation order passes — it cannot reward
+        # optimisation. See the README before selecting it.
+        "kernel_problem": "grayscale_py",
+        # "local"  -> official harness in a subprocess on this machine (real
+        #             correctness; GPU timings only if this box has CUDA)
+        # "modal"  -> the same harness on a real GPU (see kernels/modal_app.py)
+        "backend": "local",
+        "gpu": "T4",
+        # benchmark shapes kept aside to expose shape-overfitting at the end
+        "holdout_count": 3,
+    },
     # fallback initial hypothesis count if the Planner doesn't specify one
     "num_hypotheses": 4,
     # hard cap on concurrent branches (the Planner decides the actual number,
@@ -53,26 +71,32 @@ DEFAULT_RUN_CONFIG = {
     "max_branches": 12,
     "max_rounds": 5,
     "budget_usd": 2.0,
-    "experiment_timeout_s": 10,
+    # floor for one harness invocation; the problem raises it to the shapes'
+    # upstream timeout (kernel benchmarking is far slower than a TSP solve)
+    "experiment_timeout_s": 180,
     # immediate retries when an experiment reply has no code / errors / is invalid,
     # before the round counts as a failure
     "experiment_max_attempts": 3,
     # run a web-research agent (Anthropic web_search) before planning
     "enable_web_research": True,
-    # after a winner is found, judge how original its algorithm is (Anthropic
-    # web_search): does the idea already exist online, or did the lab create it?
-    "enable_originality_judge": True,
     # long-term memory: recall past runs' elite solvers + insights before
     # planning, and archive this run's outcome at the end (app.knowledge)
     "enable_knowledge_archive": True,
-    # high enough that no single basic strategy reaches it -> forces real exploration
-    "target_improvement_pct": 18.0,
+    # Aggregate speedup over the reference kernel the run aims for, as a
+    # percentage (90% == a 10x kernel). Deliberately set above what any single
+    # obvious rewrite achieves, so reaching it forces the lab to actually
+    # explore and combine — the same intent the TSP target had.
+    "target_improvement_pct": 90.0,
     "stagnation_rounds": 2,
-    # ---- evolution substrate (git DAG + population + novelty pressure) ----
+    # ---- evolution substrate (git DAG + population) ----
     # every attempt becomes a real git commit in data/runs/<id>/repo
     "enable_git_repo": True,
-    # reject near-copies of already-evaluated programs BEFORE spending on them
-    "enable_novelty_gate": True,
+    # Off by design for kernels: rediscovering a standard optimisation
+    # (tiling, coalescing, tensor cores) is a perfectly good outcome here, so
+    # the lab does not push candidates away from known techniques. The gate
+    # still exists (app.novelty) and can be switched on purely as a
+    # don't-pay-twice guard against re-evaluating an identical kernel.
+    "enable_novelty_gate": False,
     # containment similarity above which a candidate counts as a near-copy of
     # ANOTHER program (own-parent refinements are compared at 0.995)
     "novelty_threshold": 0.92,
@@ -86,3 +110,14 @@ DEFAULT_RUN_CONFIG = {
     # UCB1 bandit over mutation operators (refine/rewrite/recombine/explore)
     "enable_operator_bandit": True,
 }
+
+# --- guards against a single agent turn eating the whole run budget ---------
+# Server-side tool loops (web search) resend the entire growing conversation on
+# every pause_turn, so their input tokens grow quadratically. A researcher call
+# once reached 1.5M input tokens and $4.66 on a $2 run — these bound it, and
+# LLMClient.call additionally hard-stops on the remaining budget.
+MAX_TOOL_CONTINUATIONS = int(os.getenv("MAX_TOOL_CONTINUATIONS", "3"))
+WEB_SEARCH_MAX_USES = int(os.getenv("WEB_SEARCH_MAX_USES", "5"))
+# Hard ceiling on the context one agent turn may accumulate across tool
+# continuations. No legitimate turn comes close; the runaway hit 1.5M.
+MAX_CALL_INPUT_TOKENS = int(os.getenv("MAX_CALL_INPUT_TOKENS", "300000"))

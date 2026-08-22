@@ -6,7 +6,7 @@ const json = (r) => {
 // Demo mode: the site is published static (e.g. GitHub Pages) with no backend.
 // Real runs were frozen into public/demo/*.json by app.scripts.export_demo, and
 // we serve those instead of hitting /api. Everything read-only still works —
-// runs list, branch graph, story, replay, originality, lab memory — while the
+// runs list, branch graph, story, replay, per-shape benchmarks, lab memory — while the
 // write paths (start/stop) are disabled.
 const DEMO = import.meta.env.VITE_DEMO === "1";
 const DEMO_BASE = `${import.meta.env.BASE_URL}demo`;

@@ -8,14 +8,19 @@ A research lab for long-running autonomous agent experiments on verifiable probl
    `backend/data/runs/<run_id>/events.jsonl`. The UI (live view *and* replay) is a pure
    reduction of that event stream. Replayability is free by construction.
 2. **Problem-agnostic engine.** The orchestrator only knows the `Problem` interface
-   (`generate_instance`, `baseline`, `evaluate`, `validate`, `render_payload`).
-   TSP is the first implementation; any benchmarkable problem can plug in.
+   (`generate_instance`, `baseline`, `evaluate`, `validate`, `execute`, and optionally
+   `holdout_eval` / `behavior_descriptor`). GPU kernel optimization against the GPU MODE
+   reference-kernels benchmark is the current implementation; any problem with a
+   verifiable score and a baseline can plug in. (The lab previously ran on TSP; the
+   migration touched only the `Problem` implementation and the execution backend.)
 3. **Branches as first-class objects.** A hypothesis becomes a branch. Branches are a DAG:
    merges have two parents. Branch states: `active → collapsed | merged | winner`
    (terminal), with `failed`/`stagnant` as observable conditions that drive supervisor decisions.
-4. **Objective evaluation.** Agent-produced solver code is executed in a subprocess with a
-   timeout; the *engine* (never the agent) validates the solution and computes the score
-   against the baseline.
+4. **Objective evaluation.** Agent-produced `submission.py` is executed by the
+   *official upstream harness* (`problems/pmpp/eval.py`, vendored unmodified), which
+   checks the output against the reference on every test shape before timing anything.
+   The agent never reports its own result: correctness is a hard gate, and the score
+   is computed by the engine from the harness's per-shape measurements.
 5. **Cost awareness.** Every LLM call emits `llm.called` with token counts and USD cost,
    attributed to an agent role and branch. The orchestrator checks the budget before each
    call and stops the run gracefully when exceeded.
@@ -42,7 +47,7 @@ hypothesis and rationale.
 ### Phase 3 — Iteration rounds
 Per round, for every active branch:
 
-- **Experimenter** writes/improves solver code (`solve(cities) -> tour`), given the
+- **Experimenter** writes/improves a kernel (`submission.py` defining `custom_kernel`), given the
   hypothesis, previous code, last result, critic feedback, and shared knowledge.
 - Engine executes the code (subprocess, timeout), validates, scores. Emits `experiment.completed`.
 - **Critic** analyzes the result; may emit an `insight.added` into the shared knowledge base.
@@ -91,8 +96,17 @@ backend/app/
   models.py        dataclasses for events/branches/scope
   store.py         RunStore: JSONL log + in-memory index + SSE polling
   llm.py           LLMClient (Anthropic API or deterministic mock), cost accounting
-  sandbox.py       subprocess execution of agent solver code
-  problems/        base.py (interface), tsp.py
+  kernels/         GPU MODE integration
+    spec.py        load a vendored reference-kernel problem (task.yml shapes, sources)
+    runner.py      run the official harness: "local" subprocess or "modal" GPU backend
+    modal_app.py   the Modal app that runs the harness on a real GPU
+  problems/        base.py (interface), kernel.py (KernelBenchmark)
+  novelty.py       AST-fingerprint duplicate gate (disabled by default for kernels)
+  population.py    DGM parent selection + MAP-Elites over behavior descriptors
+  bandit.py        UCB1 over mutation operators
+  gitrepo.py       the run's real git DAG
+  scripts/
+    popcorn_submit.py  offline validation against the official leaderboard
   engine/          agents.py (prompts/parsing), mock_responses.py, orchestrator.py
   main.py          FastAPI: runs CRUD, event paging, SSE stream, stop
 ```
@@ -106,32 +120,65 @@ frontend/src/
   agents.js        visual identity (color/initials) per agent role
   narrative.js     events -> human-readable story lines
   App.jsx          run list + new-run form
-  RunView.jsx      header (phase/score/budget), replay controls, layout, live tour map
+  RunView.jsx      header (phase/timing/budget), replay controls, layout
   components/
     BranchGraph.jsx  git-style lane graph (deterministic SVG layout, hover tooltips)
-    TourCanvas.jsx   baseline vs best tour rendering (pinned under the graph, live)
-    Panels.jsx       Story / Branches / Detail / Scope / Knowledge / Costs / Results / Events
+    Panels.jsx       Story / Branches / Detail / Scope / Knowledge / Evolution /
+                     Costs / Results / Events
 ```
 
 The branch graph uses fixed lanes per branch (x) and event order (y) — a git-log style
 layout that stays readable regardless of run size. Merges draw two in-edges; collapses
 terminate a lane with a ⊘ node; the winner gets a ★ node.
 
-## Benchmark problems (tsp_benchmark)
+## The kernel benchmark (gpu_kernel)
 
-`TSPBenchmark` plugs into the same `Problem` interface but evaluates over a SET of
-TSPLIB95 instances: `generate_instance` loads dev + held-out instances,
-`execute` runs the agent's `solve()` separately per dev instance (one subprocess
-each, per-instance timeout) and attaches a per-instance `detail` to
-`experiment.completed`, and `evaluate` returns the mean gap %% vs the known optima.
-`holdout_eval` (called by the orchestrator at `run.completed` with the winner's
-code) re-runs the solver on the held-out instances against the same
-nearest-neighbor + 2-opt baseline and reports improved/worsened counts plus a
-`generalizes` verdict. Sandbox temp dirs live in `backend/data/tmp` (project-local).
+`KernelBenchmark` plugs into the same `Problem` interface and evaluates a submission
+against one vendored GPU MODE reference-kernel (`backend/data/kernels/<problem>/`,
+upstream files unchanged):
+
+- `generate_instance` reads `task.yml` and splits the benchmark shapes into **dev**
+  (what the run optimises against) and **held-out** (final verification only).
+- `execute` runs the official harness twice: `test` mode first (correctness on every
+  test shape — cheap, fails fast) and only then `benchmark` mode for the timings. It
+  attaches per-shape results as `detail` on `experiment.completed`.
+- `validate` gates on the harness's `check: pass` plus a timing for every dev shape.
+- `evaluate` returns the **geometric mean of the per-shape mean runtimes in
+  nanoseconds** — lower is better, so the engine's existing improvement maths reads as
+  the aggregate speedup over the reference kernel.
+- `holdout_eval` re-times both the reference and the winner on the held-out shapes and
+  reports per-shape speedups plus a `generalizes` verdict — this is what exposes a
+  kernel tuned only to the shapes it saw.
+- `behavior_descriptor` reports `small_speedup` / `large_speedup` / `scaling`, so
+  MAP-Elites niches capture *how* a kernel wins (small shapes vs large ones) rather
+  than what its source text says.
+
+### Execution backends
+
+`app/kernels/runner.py` assembles an identical working directory for both backends and
+parses the identical harness output, so the two are interchangeable:
+
+| backend | correctness | timings | needs |
+|---|---|---|---|
+| `local` | real | real, but **CPU timings** unless this box has CUDA | nothing |
+| `modal` | real | real GPU | a Modal account + `modal deploy app/kernels/modal_app.py` |
+
+The harness writes `key: value` lines to the fd named by `POPCORN_FD`; the runner points
+that at stdout, because passing a private fd is POSIX-only and would break on Windows.
+On a CUDA-less box the local backend rewrites `device='cuda'` in `reference.py` and
+no-ops `torch.cuda.synchronize` via an injected `sitecustomize.py` — the only source
+rewriting that ever happens, and it is tagged in the result so CPU numbers are never
+mistaken for GPU numbers.
+
+`popcorn-cli` is deliberately **not** in the loop (queue latency and rate limits); use
+`python -m app.scripts.popcorn_submit <run_id>` to validate a finished winner against
+the official leaderboard.
 
 ## Mock mode
 
 `LLM_MOCK=1` (or leaving `ANTHROPIC_API_KEY` unset) replaces the LLM with a deterministic
-script that follows the canonical demo arc — 4 hypotheses, one failing branch collapsed,
-insights discovered, two branches merged, the merged branch wins — while **all experiment
-execution, validation, and scoring remain real**. Useful for demos, development, and CI.
+script that follows the canonical demo arc — 4 hypotheses, the low-precision branch
+rejected by the correctness gate and collapsed, insights discovered, two branches merged
+into a shape-specialised kernel that wins — while **all kernel execution, correctness
+checking, and timing remain real**. The mock cannot invent a speedup the harness did not
+measure. Useful for demos, development, and CI.

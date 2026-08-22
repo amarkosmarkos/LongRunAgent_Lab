@@ -3,7 +3,8 @@ __pycache__/
 .venv/
 backend/.env
 backend/data/*
-!backend/data/tsplib/
+!backend/data/kernels/
+!backend/data/kernels/**
 node_modules/
 dist/
 .DS_Store

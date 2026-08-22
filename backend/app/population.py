@@ -54,19 +54,24 @@ def _bin(value: float, width: float, cap: int) -> int:
     return min(cap, max(0, int(value / width)))
 
 
+# descriptor key -> (short label, bin width, max bin). Problems return whatever
+# descriptor makes sense for them; only the keys listed here become niche axes,
+# so adding a problem means adding its axes, not touching the population logic.
+_NICHE_AXES = {
+    # GPU kernels: HOW a kernel wins — on small shapes, on large ones, or evenly
+    "small_speedup": ("s", 0.25, 12),
+    "large_speedup": ("l", 0.25, 12),
+    "scaling": ("sc", 0.5, 8),
+}
+
+
 def niche_key(p: Program) -> str:
     """Behavior bins when a descriptor exists, technique tags otherwise."""
     b = p.behavior or {}
-    if b:
-        parts = []
-        if "edge_cv" in b:
-            parts.append(f"cv{_bin(b['edge_cv'], 0.15, 8)}")
-        if "long_edge_ratio" in b:
-            parts.append(f"ler{_bin(b['long_edge_ratio'], 0.75, 8)}")
-        if "time_frac" in b:
-            parts.append(f"t{_bin(b['time_frac'], 0.25, 4)}")
-        if parts:
-            return "|".join(parts)
+    parts = [f"{label}{_bin(b[key], width, cap)}"
+             for key, (label, width, cap) in _NICHE_AXES.items() if key in b]
+    if parts:
+        return "|".join(parts)
     return "+".join(p.tags) if p.tags else "unclassified"
 
 

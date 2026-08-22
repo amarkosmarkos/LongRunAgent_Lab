@@ -68,7 +68,6 @@ class Orchestrator:
         "critic": "analysing the result",
         "supervisor": "reviewing branches and deciding what to keep",
         "researcher": "searching the web for state-of-the-art approaches",
-        "judge": "checking the web to see if the winning idea is original",
     }
 
     def _call(self, role: str, system: str, prompt: str,
@@ -81,12 +80,25 @@ class Orchestrator:
             "action": action or self._THINKING.get(role, "thinking"),
             "round": self.round or None,
         })
-        res = self.llm.call(role, system, prompt, context, model=model)
+        with self._lock:
+            budget_left = self.cfg["budget_usd"] - self.total_cost
+        res = self.llm.call(role, system, prompt, context, model=model,
+                            budget_left_usd=budget_left)
         with self._lock:  # branches run in parallel — cost mutation must be atomic
             self.total_cost += res.cost_usd
             self.cost_by_agent[role] = self.cost_by_agent.get(role, 0.0) + res.cost_usd
             if branch_id and branch_id in self.branches:
                 self.branches[branch_id].cost_usd += res.cost_usd
+        if getattr(res, "over_budget", False):
+            # the call's own tool loop was cut short to protect the run
+            self.run.emit("budget.capped", agent=role, branch_id=branch_id, payload={
+                "cost_usd": round(res.cost_usd, 6),
+                "budget_left_before_call": round(budget_left, 6),
+                "total_cost_usd": round(self.total_cost, 6),
+                "note": "the agent's web-search loop was stopped early because "
+                        "this single call had already spent the run's remaining "
+                        "budget; its answer may be incomplete",
+            })
         self.run.emit("llm.called", agent=role, branch_id=branch_id, payload={
             "model": res.model, "input_tokens": res.input_tokens,
             "output_tokens": res.output_tokens, "cost_usd": round(res.cost_usd, 6),
@@ -151,20 +163,28 @@ class Orchestrator:
     def _retry_feedback(code: str | None, result: dict, truncated: bool = False) -> str:
         if truncated:
             return ("Your previous reply was CUT OFF at the output token limit before "
-                    "the ```python block closed, so the code was incomplete. Write a "
-                    "SHORTER, fully self-contained solver: trim comments and dead code, "
-                    "and make sure the closing ``` is reached.")
+                    "the ```python block closed, so submission.py was incomplete. "
+                    "Write a SHORTER, fully self-contained submission: trim comments "
+                    "and dead code, and make sure the closing ``` is reached.")
         if not code:
             return ("Your reply contained no ```python code block, so nothing ran. "
                     "Emit the one-line JSON followed by exactly one ```python fence "
-                    "that defines solve(cities) and returns a tour.")
-        if "timeout" in (result.get("error") or ""):
-            return (f"The solver was too slow: {result['error']}. Make solve() "
-                    "time-bounded — record t0 = time.time() at the start and stop "
-                    "improving once time.time() - t0 exceeds the budget, returning "
-                    "the best tour found so far. Never run an unbounded loop.")
-        return (f"The solver you returned failed: {result['error']}. "
-                "Return a corrected, complete solver in one ```python fence.")
+                    "containing the whole submission.py, defining custom_kernel(data).")
+        error = result.get("error") or ""
+        if "incorrect kernel" in error or "mismatch" in error:
+            return (f"Your kernel was REJECTED BY THE CORRECTNESS GATE: {error}\n"
+                    "It was never timed, so it scored nothing. Match the reference "
+                    "exactly: keep at least the reference's accumulation precision "
+                    "(lowering it is the most common cause), and make sure every "
+                    "test shape is handled — including non-square and small ones. "
+                    "Fix correctness first; optimise only once it passes.")
+        if "timed out" in error or "timeout" in error:
+            return (f"The harness timed out: {error}. Compilation and autotuning "
+                    "count against that clock, so shrink any Triton autotune "
+                    "space, simplify or drop any cpp_extension build, and cache "
+                    "compiled artifacts at module scope so the cost is paid once.")
+        return (f"The submission you returned failed: {error}. "
+                "Return a corrected, complete submission.py in one ```python fence.")
 
     # --------------------------------------------------------------- phases
     def execute(self):
@@ -877,13 +897,6 @@ class Orchestrator:
             self.run.emit("branch.winner", agent="supervisor", branch_id=winner.id,
                           payload={"score": winner.best_score,
                                    "improvement_pct": results["improvement_pct"]})
-            # originality check: is the winning solver a genuinely new idea, or a
-            # textbook method already on the internet? Crossed with the score,
-            # this tells us where the lab actually creates original knowledge.
-            if self.cfg.get("enable_originality_judge", True) and winner.best_code:
-                originality = self._score_originality(winner, results)
-                if originality is not None:
-                    results["originality"] = originality
         # long-term memory: archive this run's outcome so future runs start
         # from what it learned (elite solver per niche + insights)
         if self.cfg.get("enable_knowledge_archive", True):
@@ -897,33 +910,3 @@ class Orchestrator:
                 self.run.emit("knowledge.archived", agent="archivist",
                               payload={"error": f"{type(e).__name__}: {e}"})
         self.run.emit("run.completed", payload={"results": results})
-
-    def _score_originality(self, winner, results: dict) -> dict | None:
-        from .. import originality as orig
-        # don't let the judge's own failure break concluding the run
-        try:
-            self.run.emit("agent.thinking", agent="judge", branch_id=winner.id,
-                          payload={"action": self._THINKING["judge"]})
-            verdict, res = self.llm.judge_originality(winner.best_code)
-            with self._lock:
-                self.total_cost += res.cost_usd
-                self.cost_by_agent["judge"] = (
-                    self.cost_by_agent.get("judge", 0.0) + res.cost_usd)
-            # keep the concluded totals consistent now that the judge has spent
-            results["total_cost_usd"] = round(self.total_cost, 6)
-            results["cost_by_agent"] = {k: round(v, 6)
-                                        for k, v in self.cost_by_agent.items()}
-            quadrant = orig.quadrant(verdict.get("originality"),
-                                     results.get("improvement_pct"),
-                                     results.get("target_improvement_pct"))
-            payload = {"verdict": verdict, "quadrant": quadrant,
-                       "improvement_pct": results.get("improvement_pct"),
-                       "cost_usd": round(res.cost_usd, 6),
-                       "total_cost_usd": round(self.total_cost, 6)}
-            self.run.emit("originality.scored", agent="judge", branch_id=winner.id,
-                          payload=payload)
-            return {"verdict": verdict, "quadrant": quadrant}
-        except Exception as e:
-            self.run.emit("originality.scored", agent="judge", branch_id=winner.id,
-                          payload={"error": f"{type(e).__name__}: {e}"})
-            return None

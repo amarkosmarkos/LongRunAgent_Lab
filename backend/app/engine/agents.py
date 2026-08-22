@@ -43,10 +43,10 @@ def parse_code(text: str) -> str | None:
     m = CODE_RE.search(text)
     if m:
         return m.group(1).strip()
-    # fallback: a plain ``` fence whose body is clearly the solver (the model
+    # fallback: a plain ``` fence whose body is clearly the submission (the model
     # forgot the `python` language tag) — better than rejecting valid code
     for body in GENERIC_FENCE_RE.findall(text):
-        if "def solve" in body:
+        if "def custom_kernel" in body:
             return body.strip()
     return None
 
@@ -89,25 +89,30 @@ HARD LIMITS set by the operator: max {config['max_rounds']} rounds, budget ${con
 
 # --------------------------------------------------------------- researcher
 RESEARCHER_SYSTEM = (
-    "You are the Research agent of an autonomous optimization lab. You search the "
-    "web for the current state-of-the-art and best practical approaches for the "
-    "given problem, and summarize concrete, implementable techniques (algorithm "
-    "families, known strong heuristics, typical optimality gaps, pitfalls). Cite "
-    "what you find. Be concise and practical — this feeds the Planner and "
-    "Strategist. Plain text, no code."
+    "You are the Research agent of an autonomous GPU-performance lab. You search "
+    "the web for the current state of the art in GPU kernel optimisation for the "
+    "given operation and hardware, and summarize concrete, implementable "
+    "techniques (tiling and blocking schemes, shared-memory and register usage, "
+    "vectorised/coalesced loads, warp-level primitives, tensor cores, kernel "
+    "fusion, launch configuration, Triton and CUDA specifics). Cite what you "
+    "find. Be concise and practical — this feeds the Planner and Strategist. "
+    "Plain text, no code."
 )
 
 
 def researcher_prompt(problem_desc: str, stats: str) -> str:
-    return f"""Research the best-known practical approaches for this problem.
+    return f"""Research how to make this GPU kernel fast.
 
 PROBLEM: {problem_desc}
-INSTANCE: {stats}
+TARGET: {stats}
 
 Search the web and report, in a few short bullet points:
-- The strongest practical algorithm families for this size/type of instance.
-- Typical optimality gaps each achieves within a few seconds.
-- Concrete implementation tips and common pitfalls.
+- The techniques that actually move the needle for this operation, dtype and
+  shape range on this class of GPU, roughly in order of expected payoff.
+- What a well-optimised implementation typically achieves relative to a naive
+  torch eager baseline, and where the hardware roofline sits.
+- Concrete implementation tips and the common pitfalls that cause wrong results
+  or blown compile budgets.
 Keep it actionable — the lab will turn this into testable hypotheses."""
 
 
@@ -151,12 +156,12 @@ Return JSON:
 {{
   "evolve": [
     {{"parent_id": "<id of an existing branch to fork (keeps its code)>",
-      "name": "<short name>", "strategy": "<algorithm family>",
+      "name": "<short name>", "strategy": "<optimisation technique, e.g. triton-tiled / tensor-cores / fused-epilogue>",
       "hypothesis": "<the specific variation to try, grounded in that branch's results>",
       "risk": "<main reason this could fail>"}}
   ],
   "new_hypotheses": [
-    {{"name": "<short name>", "strategy": "<algorithm family>",
+    {{"name": "<short name>", "strategy": "<optimisation technique, e.g. triton-tiled / tensor-cores / fused-epilogue>",
       "hypothesis": "<falsifiable claim grounded in the evidence above>",
       "risk": "<main reason this could fail>"}}
   ],
@@ -185,11 +190,14 @@ SCOPE: {json.dumps(scope)}"""]
         parts.append(f"WEB RESEARCH (use these state-of-the-art ideas):\n{research}")
     if memory:
         parts.append(memory)
-    parts.append("""Each strategy must be implementable in pure Python within the time limit.
+    parts.append("""Each strategy must be a distinct OPTIMISATION TECHNIQUE implementable in one
+self-contained submission.py (torch / Triton / inline CUDA) within the harness
+timeout. Well-known techniques are welcome — the goal is measured speedup, not
+novelty. Prefer strategies that attack different bottlenecks from one another.
 Return JSON:
 {
   "hypotheses": [
-    {"name": "<short name>", "strategy": "<algorithm family>",
+    {"name": "<short name>", "strategy": "<optimisation technique, e.g. triton-tiled / tensor-cores / fused-epilogue>",
       "hypothesis": "<falsifiable claim: doing X will improve over baseline because Y>",
       "risk": "<main reason this could fail>"}
   ]
@@ -199,25 +207,30 @@ Return JSON:
 
 # ----------------------------------------------------------- experimenter
 EXPERIMENTER_SYSTEM = (
-    "You are an Experimenter in an autonomous research lab. You write correct, fast, "
-    "pure-Python solver code to test a hypothesis.\n"
+    "You are an Experimenter in an autonomous GPU-performance lab. You write "
+    "correct, fast GPU kernel code to test a hypothesis.\n"
     "Your reply MUST have exactly two parts, in this order and nothing else:\n"
     "  1. a single-line JSON object: "
     '{\"approach\": \"...\", \"expectation\": \"...\"}\n'
     "  2. exactly one fenced code block opened with a line containing only ```python "
-    "and closed with a line containing only ``` — inside it, the COMPLETE solver "
-    "defining `def solve(cities): ...` and returning a tour (a list of int).\n"
+    "and closed with a line containing only ``` — inside it, the COMPLETE contents "
+    "of `submission.py`, defining `def custom_kernel(data): ...`.\n"
     "Do not add prose before, between, or after these two parts. Do not use any "
     "other code fence. If you omit the ```python block the experiment is a total "
     "failure, so never describe code in words — always emit the runnable block.\n"
-    "The code MUST be complete and self-contained: define every function and name "
-    "you use, no '...' placeholders, no TODOs, no references to earlier messages. "
-    "It MUST be time-bounded with MARGIN: derive the budget from the instance size "
-    "(budget = 0.04 * len(cities) seconds), capture t0 = time.time(), and check the "
-    "clock INSIDE long loops — not only between sweeps — returning the best tour so "
-    "far before the budget. Timeouts are the most common failure; a solver that can "
-    "exceed the time limit is a failed solver. "
-    "Keep it compact enough to fit well within the output limit (trim comments)."
+    "The code MUST be complete and self-contained: every import, helper, kernel "
+    "and constant you use must be defined in that one file. No '...' placeholders, "
+    "no TODOs, no references to earlier messages.\n"
+    "CORRECTNESS IS A HARD GATE: the harness compares your output against the "
+    "reference on every test shape before it times anything. A kernel that is "
+    "fast but wrong scores nothing at all, so never trade accuracy for speed.\n"
+    "Compilation and autotuning happen at benchmark time and count against the "
+    "clock, so keep JIT work bounded: a huge Triton autotune grid or a slow "
+    "cpp_extension build can blow the harness timeout and lose the experiment. "
+    "Standard optimisations are exactly what is wanted here — tiling, shared "
+    "memory, coalesced and vectorised loads, warp-level primitives, kernel "
+    "fusion, better launch configurations, tensor cores, shape specialisation. "
+    "Reusing a well-known technique is a success, not a weakness."
 )
 
 
@@ -241,7 +254,7 @@ INSTANCE: {stats}"""]
     if crossover:
         parts.append(
             "CROSSOVER TASK — this branch is a MERGE of two lineages. Combine "
-            "them into one solver that beats both.\n"
+            "them into one kernel that beats both.\n"
             f"WHY THEY WERE MERGED: {crossover.get('reflection')}\n"
             f"PARENT A \"{crossover.get('a_name')}\" (score {crossover.get('a_score')}):\n"
             f"```python\n{crossover.get('a_code')}\n```\n"
@@ -276,27 +289,23 @@ INSTANCE: {stats}"""]
         parts.append("YOUR PREVIOUS ATTEMPT THIS ROUND FAILED — fix it now.\n"
                      f"{retry_feedback}")
     parts.append("""Reply with exactly these two parts and nothing else. The code must be
-COMPLETE (define everything, no placeholders) and strictly TIME-BOUNDED.
-TIMEOUTS ARE THE #1 FAILURE — avoid them with margin:
-- Derive your budget from the instance size: `budget = 0.04 * len(cities)` seconds.
-  You are given MORE wall time than that, so staying under it guarantees no timeout.
-- Check `time.time() - t0` INSIDE every long loop (e.g. inside a 2-opt/Or-opt sweep),
-  not only between sweeps — a single full sweep on a few hundred cities can take >1s.
-  Never START a sweep or restart you cannot finish before the budget.
-- For large n, use k-nearest candidate lists; do NOT build a full n*n matrix or use
-  O(n^3) moves.
+the COMPLETE submission.py (define everything, no placeholders).
+THE TWO WAYS EXPERIMENTS ARE LOST — avoid both:
+- WRONG OUTPUT. The harness checks your result against the reference on every test
+  shape before timing anything, and any mismatch beyond tolerance scores nothing.
+  Watch dtypes, accumulation precision, and non-square / non-power-of-two shapes.
+- TIMEOUT. Compilation and autotuning run inside the measured window. Keep any
+  Triton autotune space small and any cpp_extension build simple, and cache
+  compiled artifacts at module scope so the cost is paid once, not per call.
+Handle every benchmark shape, not just the largest: specialising is allowed, but a
+shape you forget to handle is a correctness failure.
 {"approach": "<one sentence: what you changed and why>", "expectation": "<expected effect>"}
 ```python
-import time
+import torch
+from task import input_t, output_t
 
-def solve(cities):
-    t0 = time.time()
-    n = len(cities)
-    budget = 0.04 * n            # seconds; you get more wall than this — stay well under it
-    best = list(range(n))        # replace with NN/greedy construction + local search
-    while time.time() - t0 < budget:
-        ...                      # one improvement step; check time.time()-t0 inside long sweeps too
-    return best                  # a permutation of range(n)
+def custom_kernel(data: input_t) -> output_t:
+    ...            # your optimised implementation; must match the reference exactly
 ```""")
     return "\n\n".join(parts)
 

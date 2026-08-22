@@ -27,14 +27,37 @@ def health():
 
 @app.get("/api/problems")
 def problems():
-    from .problems.tsp import DEFAULT_DEV, DEFAULT_HOLDOUT, tsplib_catalog
+    from .kernels import runner, spec
+    kernels = []
+    for name in spec.available_problems():
+        try:
+            s = spec.load_spec(name)
+        except Exception:
+            continue
+        kernels.append({
+            "name": name,
+            "description": s["description"],
+            "tests": len(s["tests"]),
+            "benchmarks": len(s["benchmarks"]),
+        })
     return {
         "problems": [{"name": p.name, "description": p.description}
                      for p in PROBLEMS.values()],
-        "tsplib": {"catalog": tsplib_catalog(),
-                   "default_dev": DEFAULT_DEV,
-                   "default_holdout": DEFAULT_HOLDOUT},
+        "kernels": kernels,
+        "backends": {
+            "local": runner.backend_info("local", ""),
+            "modal": {"available": _modal_installed(),
+                      "gpus": ["T4", "L4", "A100", "H100"]},
+        },
     }
+
+
+def _modal_installed() -> bool:
+    try:
+        import modal  # noqa: F401
+        return True
+    except ImportError:
+        return False
 
 
 @app.get("/api/runs")

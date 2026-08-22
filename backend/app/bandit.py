@@ -28,12 +28,13 @@ OPERATORS: dict[str, str] = {
         "one coherent solver. Name in your approach which piece came from "
         "where and why the combination should beat every source."),
     "explore": (
-        "OPERATOR: EXPLORE. Deliberately break one standard assumption of the "
-        "known approaches (e.g. change the neighborhood definition, the "
-        "acceptance rule, the construction order, or the objective the local "
-        "search optimizes). Aim for a mechanism that is NOT in the literature "
-        "you were shown, even at the risk of a worse score — a novel valid "
-        "mechanism is worth more than a small improvement."),
+        "OPERATOR: EXPLORE. Attack a DIFFERENT bottleneck than the base program "
+        "does — change the memory access pattern, the tiling scheme, the "
+        "precision or accumulation strategy, the launch configuration, or move "
+        "between torch / Triton / inline CUDA. Aim to land somewhere the "
+        "population has not been yet, even at the risk of a worse time; a "
+        "correct kernel that behaves differently is worth more than another "
+        "marginal tweak."),
 }
 
 

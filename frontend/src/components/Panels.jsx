@@ -1,5 +1,4 @@
 import React from "react";
-import TourCanvas from "./TourCanvas.jsx";
 import { agentMeta } from "../agents.js";
 import { narrate } from "../narrative.js";
 import { fmtScore } from "../format.js";
@@ -398,33 +397,31 @@ function HoldoutReport({ holdout }) {
   const s = holdout.summary || {};
   return (
     <div className="panelcard">
-      <h4>Held-out verification (instances the agents never saw)</h4>
+      <h4>Held-out verification (shapes the agents never benchmarked against)</h4>
       <div style={{ marginBottom: 8 }}>
         <span className={`badge ${s.generalizes ? "winner" : "collapsed"}`}
           style={{ marginLeft: 0 }}>
           {s.generalizes ? "generalizes" : "does not generalize"}
         </span>
         <span className="sub" style={{ marginLeft: 10 }}>
-          mean gap {fmtScore(s.mean_baseline_gap)}% → {fmtScore(s.mean_winner_gap)}% ·
-          {" "}{s.improved} improved · {s.worsened} worsened
+          mean {s.mean_speedup != null ? `${s.mean_speedup}x` : "—"} vs reference ·
+          {" "}{s.improved} faster · {s.worsened} slower
           {s.failed ? ` · ${s.failed} failed` : ""}
-          {s.mean_lkh_gap != null ? ` · LKH (SOTA) ${fmtScore(s.mean_lkh_gap)}%` : ""}
         </span>
       </div>
       <table className="htable">
         <thead>
-          <tr><th>instance</th><th>cities</th><th>optimum</th>
-            <th>baseline gap</th><th>LKH gap</th><th>winner gap</th><th>outcome</th></tr>
+          <tr><th>shape</th><th>reference (ns)</th><th>winner (ns)</th>
+            <th>speedup</th><th>outcome</th></tr>
         </thead>
         <tbody>
-          {(holdout.instances || []).map((r) => (
+          {(holdout.shapes || []).map((r) => (
             <tr key={r.name}>
-              <td>{r.name}</td>
-              <td>{r.n_cities}</td>
-              <td>{r.optimum}</td>
-              <td>{fmtScore(r.baseline_gap)}%</td>
-              <td style={{ color: "#a8780f" }}>{r.lkh_gap != null ? `${fmtScore(r.lkh_gap)}%` : "—"}</td>
-              <td>{r.winner_gap != null ? `${fmtScore(r.winner_gap)}%` : (r.error || "—")}</td>
+              <td style={{ fontFamily: "monospace" }}>{r.name}</td>
+              <td>{fmtScore(r.baseline_ns)}</td>
+              <td>{r.winner_ns != null ? fmtScore(r.winner_ns) : "—"}</td>
+              <td style={{ color: r.speedup > 1 ? "var(--green)" : "var(--muted)" }}>
+                {r.speedup != null ? `${r.speedup}x` : "—"}</td>
               <td style={{
                 color: r.outcome === "improved" ? "var(--green)" :
                   r.outcome === "worsened" || r.outcome === "failed"
@@ -435,119 +432,16 @@ function HoldoutReport({ holdout }) {
         </tbody>
       </table>
       <div className="sub" style={{ marginTop: 6 }}>
-        A modification only counts if it beats the baseline on instances that
-        were not used during development.
+        A kernel only counts if it also beats the reference on shapes it was
+        never tuned against — this is what exposes shape-specific overfitting.
       </div>
-    </div>
-  );
-}
-
-// ---------------------------------------------------------- Originality
-const QUADRANT_META = {
-  "original+wins": { label: "Original & wins", cls: "good",
-    note: "Novel idea that also beats the target — the knowledge the lab is built to create." },
-  rehash: { label: "Known method (works)", cls: "rehash",
-    note: "Beats the target, but the algorithm already exists in the literature." },
-  "novel-weak": { label: "Novel but weak", cls: "novel",
-    note: "An unusual idea that doesn't beat the target yet." },
-  noise: { label: "Not original", cls: "noise",
-    note: "Neither novel nor strong enough to matter." },
-  "?": { label: "Inconclusive", cls: "noise", note: "" },
-};
-
-// 2x2 novelty (y) x quality (x) map with the run plotted as a dot. Quality is
-// measured against the target: the vertical midline is "hit the target".
-function QuadrantChart({ originality, improvementPct, targetPct }) {
-  const W = 220, H = 170, pad = 26;
-  const x0 = pad, x1 = W - 10, y0 = 10, y1 = H - pad;
-  const ratio = targetPct ? (improvementPct ?? 0) / targetPct : 1;
-  const qx = Math.max(0, Math.min(1, ratio / 2)); // target sits at 0.5
-  const oy = Math.max(0, Math.min(1, (originality ?? 0) / 10));
-  const cx = x0 + qx * (x1 - x0);
-  const cy = y1 - oy * (y1 - y0);
-  const midX = x0 + 0.5 * (x1 - x0);
-  const midY = y0 + 0.5 * (y1 - y0);
-  return (
-    <svg className="quadchart" viewBox={`0 0 ${W} ${H}`} width="100%">
-      {/* the prize cell: novel (top) AND wins (right) */}
-      <rect x={midX} y={y0} width={x1 - midX} height={midY - y0}
-        className="qcell-good" />
-      <line x1={midX} y1={y0} x2={midX} y2={y1} className="qgrid" />
-      <line x1={x0} y1={midY} x2={x1} y2={midY} className="qgrid" />
-      <line x1={x0} y1={y0} x2={x0} y2={y1} className="qaxis" />
-      <line x1={x0} y1={y1} x2={x1} y2={y1} className="qaxis" />
-      <text x={x1} y={y1 + 16} className="qlab" textAnchor="end">quality →</text>
-      <text x={x0 - 6} y={y0 + 6} className="qlab" textAnchor="end"
-        transform={`rotate(-90 ${x0 - 6} ${y0 + 6})`}>originality →</text>
-      <text x={x1 - 3} y={y0 + 11} className="qhint" textAnchor="end">novel + wins</text>
-      <circle cx={cx} cy={cy} r={6} className="qdot" />
-    </svg>
-  );
-}
-
-function OriginalityReport({ originality, results }) {
-  if (!originality) return null;
-  if (originality.error)
-    return (
-      <div className="panelcard">
-        <h4><AgentBadge name="judge" small /> Originality of the winning idea</h4>
-        <div style={{ color: "var(--red)" }}>{originality.error}</div>
-      </div>
-    );
-  const v = originality.verdict || {};
-  const q = QUADRANT_META[originality.quadrant] || QUADRANT_META["?"];
-  const improvementPct = originality.improvement_pct ?? results?.improvement_pct;
-  const targetPct = results?.target_improvement_pct;
-  return (
-    <div className="panelcard originality">
-      <h4><AgentBadge name="judge" small /> Originality of the winning idea</h4>
-      <div className="sub" style={{ marginBottom: 8 }}>
-        A judge with web search read the winning solver, identified its
-        mechanism, and checked whether the idea already exists online — then
-        crossed that with whether it beat the target.
-      </div>
-      <div className="origtop">
-        <div className="origscore">
-          <span className="num">{v.originality ?? "—"}<small>/10</small></span>
-          <span className="lbl">originality</span>
-          <span className={`badge ${q.cls}`} style={{ marginLeft: 0, marginTop: 6 }}>
-            {q.label}
-          </span>
-          <span className={`online ${v.exists_online ? "yes" : "no"}`}>
-            {v.exists_online ? "● already online" : "○ no public precedent"}
-          </span>
-        </div>
-        <QuadrantChart originality={v.originality}
-          improvementPct={improvementPct} targetPct={targetPct} />
-      </div>
-      {q.note && <div className="sub" style={{ marginTop: 2 }}>{q.note}</div>}
-      <div className="kv" style={{ marginTop: 8 }}>
-        {v.mechanism && (<><span className="k">mechanism</span>
-          <span className="v">{v.mechanism}</span></>)}
-        {v.nearest_known_technique && (<><span className="k">closest known</span>
-          <span className="v">{v.nearest_known_technique}</span></>)}
-      </div>
-      {v.justification && (
-        <div className="sub" style={{ marginTop: 8 }}>{v.justification}</div>)}
-      {v.source_url && (
-        <div style={{ marginTop: 6 }}>
-          <a className="link" href={v.source_url} target="_blank" rel="noreferrer">
-            source ↗</a>
-        </div>
-      )}
-      {v.mock && (
-        <div className="sub" style={{ marginTop: 6, color: "var(--amber)" }}>
-          Mock mode: heuristic verdict, no real web search. Run with a real API
-          key to get a web-checked judgment.
-        </div>
-      )}
     </div>
   );
 }
 
 // -------------------------------------------------------------- Results
 export function ResultsPanel({ state }) {
-  const { results, baseline, instance, bestSolution, bestScore, originality } = state;
+  const { results, baseline, bestScore } = state;
   const imp = results?.improvement_pct ??
     (bestScore != null && baseline
       ? Math.round(((baseline.score - bestScore) / baseline.score) * 1000) / 10
@@ -556,15 +450,23 @@ export function ResultsPanel({ state }) {
     <div>
       <div className="resultbig">
         <div className="stat">
-          <span className="k">baseline</span>
+          <span className="k">reference (ns)</span>
           <span className="v">{fmtScore(baseline?.score)}</span>
         </div>
         <div className="stat">
-          <span className="k">best found</span>
+          <span className="k">best kernel (ns)</span>
           <span className="v good">{fmtScore(bestScore)}</span>
         </div>
         <div className="stat">
-          <span className="k">improvement</span>
+          <span className="k">speedup</span>
+          <span className="v gold">
+            {bestScore && baseline?.score
+              ? `${Math.round((baseline.score / bestScore) * 100) / 100}x`
+              : "—"}
+          </span>
+        </div>
+        <div className="stat">
+          <span className="k">faster by</span>
           <span className="v gold">{imp != null ? `${imp}%` : "—"}</span>
         </div>
       </div>
@@ -593,20 +495,17 @@ export function ResultsPanel({ state }) {
           </div>
         </div>
       )}
-      <OriginalityReport originality={originality} results={results} />
       {results?.holdout && <HoldoutReport holdout={results.holdout} />}
       {results?.winner_code && (
         <div className="panelcard">
-          <h4>Winning solver code (the optimal solver found)</h4>
+          <h4>Winning submission.py (the fastest correct kernel found)</h4>
           <div className="sub" style={{ marginBottom: 6 }}>
-            This exact pure-Python solver produced the best result above and was
-            re-verified independently by the engine.
+            This exact file produced the timing above. It passed every
+            correctness shape of the official harness before it was timed.
           </div>
           <pre className="code">{results.winner_code}</pre>
         </div>
       )}
-      <TourCanvas instance={instance} baseline={baseline}
-        bestSolution={results?.best_solution || bestSolution} bestScore={bestScore} />
     </div>
   );
 }
@@ -751,22 +650,44 @@ export function DetailPanel({ state, events, selectedSeq, onSelect }) {
               </span></>)}
           </div>
         </div>
-        {p.detail && (
+        {p.detail?.tests?.length > 0 && (
           <div className="panelcard">
-            <h4>Per-instance results</h4>
+            <h4>Correctness (official harness, per test shape)</h4>
+            <table className="htable">
+              <thead><tr><th>shape</th><th>status</th><th>error</th></tr></thead>
+              <tbody>
+                {p.detail.tests.map((t) => (
+                  <tr key={t.index}>
+                    <td style={{ fontFamily: "monospace" }}>{t.spec}</td>
+                    <td style={{ color: t.status === "pass"
+                      ? "var(--green)" : "var(--red)" }}>{t.status}</td>
+                    <td className="sub">{(t.error || "").slice(0, 90)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+        {p.detail?.per_shape && Object.keys(p.detail.per_shape).length > 0 && (
+          <div className="panelcard">
+            <h4>Per-shape benchmark (nanoseconds)</h4>
             <table className="htable">
               <thead>
-                <tr><th>instance</th><th>length</th><th>optimum</th>
-                  <th>gap</th><th>time</th></tr>
+                <tr><th>shape</th><th>mean</th><th>best</th><th>worst</th>
+                  <th>runs</th><th>vs reference</th></tr>
               </thead>
               <tbody>
-                {Object.entries(p.detail).map(([name, d]) => (
+                {Object.entries(p.detail.per_shape).map(([name, d]) => (
                   <tr key={name}>
-                    <td>{name}</td>
-                    <td>{d.length}</td>
-                    <td>{d.optimum}</td>
-                    <td>{fmtScore(d.gap_pct)}%</td>
-                    <td>{d.time_s}s</td>
+                    <td style={{ fontFamily: "monospace" }}>{name}</td>
+                    <td>{fmtScore(d.mean)}</td>
+                    <td>{fmtScore(d.best)}</td>
+                    <td>{fmtScore(d.worst)}</td>
+                    <td>{d.runs ?? "—"}</td>
+                    <td style={{ color: d.speedup_vs_baseline > 1
+                      ? "var(--green)" : "var(--muted)" }}>
+                      {d.speedup_vs_baseline ? `${d.speedup_vs_baseline}x` : "—"}
+                    </td>
                   </tr>
                 ))}
               </tbody>

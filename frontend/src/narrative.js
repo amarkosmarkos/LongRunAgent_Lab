@@ -17,18 +17,11 @@ const DEFAULT_AGENT = {
   "branch.collapsed": "supervisor",
   "branch.merged": "supervisor",
   "branch.winner": "supervisor",
-  "originality.scored": "judge",
   "knowledge.recalled": "archivist",
   "knowledge.archived": "archivist",
   "novelty.rejected": "experimenter",
   "population.seeded": "archivist",
-};
-
-const QUADRANT_PHRASE = {
-  "original+wins": "original knowledge that also beats the target",
-  rehash: "a known method — it works but is not new",
-  "novel-weak": "a novel idea that doesn't beat the target yet",
-  noise: "neither original nor strong enough",
+  "budget.capped": "planner",
 };
 
 export function narrate(ev, state) {
@@ -41,9 +34,10 @@ export function narrate(ev, state) {
       const c = p.config || {};
       return {
         agent: null,
-        text: `Run created — ${c.problem || "problem"} with ` +
-          `${c.problem_params?.n_cities ?? "?"} cities, ${c.num_hypotheses} hypotheses, ` +
-          `budget $${c.budget_usd}. Baseline (${p.baseline?.algorithm}): ${fmtScore(p.baseline?.score)}.`,
+        // problem.stats already names the kernel and the backend
+        text: `Run created — ${p.problem?.stats || c.problem || "problem"} ` +
+          `${c.num_hypotheses} hypotheses, budget $${c.budget_usd}. ` +
+          `Baseline (${p.baseline?.algorithm}): ${fmtScore(p.baseline?.score)} ns.`,
       };
     }
     case "research.findings":
@@ -112,29 +106,29 @@ export function narrate(ev, state) {
     case "population.seeded": {
       const n = p.archive_seeds || 0;
       const bits = [];
-      if (n) bits.push(`${n} past elite solver${n === 1 ? "" : "s"} joined the gene pool as parents`);
+      if (n) bits.push(`${n} past elite kernel${n === 1 ? "" : "s"} joined the gene pool as parents`);
       if (p.bandit_models) bits.push("the operator bandit will learn which mutation pays off");
       if (!bits.length) return null;
       return { agent, text: `Prepared the evolving population: ${bits.join("; ")}.` };
     }
     case "git.initialized":
       return p.available
-        ? { agent: null, text: "Git substrate ready — every solver attempt in this run becomes a real commit in the run's repository." }
+        ? { agent: null, text: "Git substrate ready — every kernel submission in this run becomes a real commit in the run's repository." }
         : null;
     case "experiment.completed": {
       const name = bname(ev.branch_id);
       if (!p.valid)
         return {
           agent,
-          text: `Round ${p.round} on "${name}" failed: ${p.error || "invalid solution"}.`,
+          text: `Round ${p.round} on "${name}" failed: ${p.error || "the kernel did not pass correctness"}.`,
         };
       if (p.improved)
         return {
           agent,
-          text: `Round ${p.round} on "${name}": score ${fmtScore(p.score)}` +
-            `${p.improvement_pct != null ? ` — ${p.improvement_pct}% vs baseline` : ""}.`,
+          text: `Round ${p.round} on "${name}": ${fmtScore(p.score)} ns` +
+            `${p.improvement_pct != null ? ` — ${p.improvement_pct}% faster than the reference` : ""}.`,
         };
-      return { agent, text: `Round ${p.round} on "${name}": score ${fmtScore(p.score)}, no improvement.` };
+      return { agent, text: `Round ${p.round} on "${name}": ${fmtScore(p.score)} ns, no improvement.` };
     }
     case "critique.added":
       return {
@@ -151,21 +145,8 @@ export function narrate(ev, state) {
       return {
         agent,
         text: `Declared "${bname(ev.branch_id)}" the winner` +
-          `${p.score != null ? ` with score ${fmtScore(p.score)}` : ""}.`,
+          `${p.score != null ? ` at ${fmtScore(p.score)} ns` : ""}.`,
       };
-    case "originality.scored": {
-      if (p.error) return { agent, text: `Originality check unavailable (${p.error}).` };
-      const v = p.verdict || {};
-      const where = v.exists_online
-        ? `the idea is already published${v.nearest_known_technique ? ` (closest: ${v.nearest_known_technique})` : ""}`
-        : "no public precedent found";
-      const q = QUADRANT_PHRASE[p.quadrant];
-      return {
-        agent,
-        text: `Judged the winning solver — originality ${v.originality}/10: ${where}` +
-          `${q ? `. Verdict: ${q}` : ""}.`,
-      };
-    }
     case "knowledge.recalled": {
       if (p.error) return { agent, text: `Lab memory unavailable (${p.error}).` };
       if (p.empty)
@@ -174,7 +155,7 @@ export function narrate(ev, state) {
       const ni = (p.insights || []).length;
       return {
         agent,
-        text: `Recalled the lab's long-term memory: ${ns} elite solver${ns === 1 ? "" : "s"} ` +
+        text: `Recalled the lab's long-term memory: ${ns} elite kernel${ns === 1 ? "" : "s"} ` +
           `and ${ni} insight${ni === 1 ? "" : "s"} from ${p.archive_size?.runs ?? "?"} past runs — ` +
           `handed to the Planner and Strategist.`,
       };
@@ -182,7 +163,7 @@ export function narrate(ev, state) {
     case "knowledge.archived": {
       if (p.error) return { agent, text: `Could not archive this run's knowledge (${p.error}).` };
       const bits = [];
-      if (p.solver_added) bits.push(`the winning solver now holds the "${p.niche}" niche`);
+      if (p.solver_added) bits.push(`the winning kernel now holds the "${p.niche}" niche`);
       if (p.insights_added) bits.push(`${p.insights_added} new insight${p.insights_added === 1 ? "" : "s"} joined the pool`);
       return {
         agent,
@@ -191,17 +172,32 @@ export function narrate(ev, state) {
           : "Archived this run — no new knowledge beat what the memory already holds.",
       };
     }
+    case "budget.capped":
+      return {
+        agent,
+        text: `Budget guard: this single call had already spent the run's ` +
+          `remaining budget ($${(p.cost_usd ?? 0).toFixed(2)}), so its ` +
+          `web-search loop was stopped early. The answer may be incomplete.`,
+      };
     case "run.completed": {
       const r = p.results || {};
-      let text = `Run completed — ${r.improvement_pct}% improvement, ` +
+      // a run can conclude without ever producing a kernel (budget, stop, error)
+      if (r.improvement_pct == null)
+        return {
+          agent: null,
+          text: `Run ended without a working kernel — ${r.ended_reason || "unknown reason"}. ` +
+            `Spent $${(r.total_cost_usd ?? 0).toFixed(2)}` +
+            `${r.rounds_completed ? ` over ${r.rounds_completed} round(s)` : " before any experiment ran"}.`,
+        };
+      let text = `Run completed — ${r.improvement_pct}% faster than the reference, ` +
         `target ${r.target_met ? "met" : "not met"}, ` +
         `total cost $${(r.total_cost_usd ?? 0).toFixed(2)}.`;
       const h = r.holdout?.summary;
       if (h)
-        text += ` Held-out check: ${h.improved} improved, ${h.worsened} worsened` +
-          `${h.failed ? `, ${h.failed} failed` : ""} — the winner ` +
-          `${h.generalizes ? "GENERALIZES" : "does NOT generalize"} ` +
-          `(mean gap ${fmtScore(h.mean_baseline_gap)}% → ${fmtScore(h.mean_winner_gap)}%).`;
+        text += ` Held-out shapes: ${h.improved} faster, ${h.worsened} slower` +
+          `${h.failed ? `, ${h.failed} failed` : ""} — the winning kernel ` +
+          `${h.generalizes ? "GENERALIZES" : "does NOT generalize"}` +
+          `${h.mean_speedup ? ` (mean ${h.mean_speedup}x)` : ""}.`;
       return { agent: null, text };
     }
     case "run.stopped":

@@ -9,7 +9,7 @@ runs' event logs into `frontend/public/demo/`:
 
 The frontend's demo API layer (see frontend/src/api.js, VITE_DEMO=1) serves
 these files instead of calling /api, so the whole experience — branch graph,
-story, replay, originality, lab memory — works fully static.
+story, replay, per-shape benchmarks, lab memory — works fully static.
 
 Usage (from backend/):
   python -m app.scripts.export_demo                 # every run on disk

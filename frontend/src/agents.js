@@ -11,7 +11,7 @@ export const AGENTS = {
   },
   experimenter: {
     label: "Experimenter", color: "var(--agent-experimenter)", initials: "EX",
-    blurb: "writes and runs solver code",
+    blurb: "writes kernels and runs them through the official harness",
   },
   critic: {
     label: "Critic", color: "var(--agent-critic)", initials: "CR",
@@ -24,10 +24,6 @@ export const AGENTS = {
   researcher: {
     label: "Researcher", color: "var(--agent-researcher)", initials: "RE",
     blurb: "searches the web for state-of-the-art approaches",
-  },
-  judge: {
-    label: "Originality Judge", color: "var(--agent-judge)", initials: "OJ",
-    blurb: "checks the web to see if the winning idea is genuinely original",
   },
   archivist: {
     label: "Archivist", color: "var(--agent-archivist)", initials: "AV",

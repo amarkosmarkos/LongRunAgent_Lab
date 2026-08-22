@@ -3,7 +3,6 @@ import { api } from "./api.js";
 import { fmtScore } from "./format.js";
 import { buildGraph, reduceEvents } from "./replay.js";
 import BranchGraph, { GraphLegend } from "./components/BranchGraph.jsx";
-import TourCanvas from "./components/TourCanvas.jsx";
 import { agentMeta } from "./agents.js";
 import {
   BranchesPanel, CostPanel, DetailPanel, EvolutionPanel, EventFeed,
@@ -27,7 +26,6 @@ export default function RunView({ runId, onBack }) {
   const [speed, setSpeed] = useState(4);
   const [tab, setTab] = useState("story");
   const [selectedSeq, setSelectedSeq] = useState(null);
-  const [mapOpen, setMapOpen] = useState(true);
   const [sideOpen, setSideOpen] = useState(true); // hide to see just the diagram
   const eventsRef = useRef(events);
   eventsRef.current = events;
@@ -104,6 +102,15 @@ export default function RunView({ runId, onBack }) {
   const budget = state.config?.budget_usd || 0;
   const budgetPct = budget ? Math.min(100, (state.costs.total / budget) * 100) : 0;
 
+  // a run that concluded without producing a single experiment needs to say
+  // why, everywhere — an empty graph on its own reads as "still loading"
+  const endedReason = state.endedReason ||
+    (status === "budget_exceeded" ? "budget exceeded" :
+      status === "stopped" ? "stopped by user" :
+        status === "failed" ? (state.failure || "engine error") : null);
+  const endedNoWork = TERMINAL.includes(status) && !state.branchOrder.length;
+  const overBudget = budget > 0 && state.costs.total > budget;
+
   const select = (seq) => { setSelectedSeq(seq); setTab("detail"); };
   const live = cursor == null;
   const running = !TERMINAL.includes(status);
@@ -126,17 +133,17 @@ export default function RunView({ runId, onBack }) {
               : `● real agents · ${state.models.map((m) => m.replace("claude-", "").replace(/-\d+$/, "")).join(" + ")}`}
           </span>
         )}
-        <div className="stat"><span className="k">baseline</span>
+        <div className="stat"><span className="k">reference (ns)</span>
           <span className="v">{fmtScore(state.baseline?.score)}</span></div>
-        <div className="stat"><span className="k">best</span>
+        <div className="stat"><span className="k">best (ns)</span>
           <span className="v good">{fmtScore(state.bestScore)}</span></div>
-        <div className="stat"><span className="k">improvement</span>
+        <div className="stat"><span className="k">speedup</span>
+          <span className="v gold">
+            {state.bestScore && state.baseline?.score
+              ? `${Math.round((state.baseline.score / state.bestScore) * 100) / 100}x`
+              : "—"}</span></div>
+        <div className="stat"><span className="k">faster by</span>
           <span className="v gold">{imp != null ? `${imp}%` : "—"}</span></div>
-        {state.originality?.verdict?.originality != null && (
-          <div className="stat" title="How original the winning solver's idea is, judged against the web">
-            <span className="k">originality</span>
-            <span className="v">{state.originality.verdict.originality}/10</span></div>
-        )}
         <div className="stat"><span className="k">cost</span>
           <span className="v">${state.costs.total.toFixed(4)}</span></div>
         <div className="stat"><span className="k">budget {budget ? `$${budget}` : ""}</span>
@@ -147,6 +154,24 @@ export default function RunView({ runId, onBack }) {
             onClick={() => api.stopRun(runId)}>■ Stop run</button>
         )}
       </div>
+
+      {(endedNoWork || overBudget) && (
+        <div className="activitybar" style={{ borderLeft: "3px solid var(--red)" }}>
+          <span className="thinking">
+            <span className="act">
+              <b style={{ color: "var(--red)" }}>
+                {overBudget ? "Budget overrun" : "Run ended early"}
+              </b>
+              {" — "}
+              {endedReason || "the run stopped"}
+              {overBudget && `. Spent $${state.costs.total.toFixed(2)} of a $${budget} budget`}
+              {endedNoWork && ". No experiment ever ran, so there is no branch graph."}
+              {state.budgetCapped?.length > 0 &&
+                ` ${state.budgetCapped.length} call(s) were cut short by the budget guard.`}
+            </span>
+          </span>
+        </div>
+      )}
 
       <div className="replaybar">
         <button onClick={() => { setCursor(0); setPlaying(false); }}>⏮</button>
@@ -207,24 +232,9 @@ export default function RunView({ runId, onBack }) {
           <div className="graphwrap">
             <BranchGraph graph={graph} branches={state.branches}
               activity={live ? state.activity : {}}
+              endedReason={endedNoWork ? endedReason : null}
               selectedSeq={selectedSeq} onSelect={select} />
           </div>
-          {state.instance && (
-            <div className="mappanel">
-              <div className="maphead">
-                <span>Tour map</span>
-                <span className="sub">updates live as experiments improve the tour</span>
-                <button className="link" onClick={() => setMapOpen((o) => !o)}>
-                  {mapOpen ? "hide ▾" : "show ▸"}
-                </button>
-              </div>
-              {mapOpen && (
-                <TourCanvas instance={state.instance} baseline={state.baseline}
-                  bestSolution={state.results?.best_solution || state.bestSolution}
-                  bestScore={state.bestScore} width={520} height={230} />
-              )}
-            </div>
-          )}
         </div>
         {sideOpen && (
         <div className="sidepanel">

@@ -2,4 +2,16 @@ fastapi>=0.110
 uvicorn[standard]>=0.29
 anthropic>=0.40
 python-dotenv>=1.0
-elkai>=2.0  # LKH (Lin-Kernighan-Helsgaun) — state-of-the-art TSP reference
+PyYAML>=6.0            # parse the reference-kernels task.yml specs
+
+# The official GPU MODE harness runs agent submissions, so torch (and numpy,
+# which its utils.py imports) must be importable by the eval subprocess.
+# The CPU wheel is what the "local" backend needs; a real GPU run happens on
+# Modal, whose image installs its own CUDA torch (see app/kernels/modal_app.py).
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch>=2.6
+numpy>=1.26
+
+# Optional: the Modal execution backend. Uncomment (or `pip install modal`)
+# to evaluate kernels on a real GPU.
+# modal>=0.64

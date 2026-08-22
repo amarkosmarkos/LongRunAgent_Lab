@@ -1,1 +1,1 @@
-from .tsp import PROBLEMS  # noqa: F401
+from .kernel import PROBLEMS  # noqa: F401
