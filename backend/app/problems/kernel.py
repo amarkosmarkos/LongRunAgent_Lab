@@ -89,10 +89,16 @@ class KernelBenchmark(Problem):
 
     # ------------------------------------------------------------ baseline
     def baseline(self, instance: dict):
-        """The upstream reference submission.py, measured the same way."""
+        """The upstream reference submission.py, measured the same way.
+
+        Its correctness pass is skipped: it IS the reference, so proving it
+        matches itself only costs a torch-importing subprocess. Benchmark mode
+        still checks every shape it times, so a broken vendored file is caught.
+        """
         code = spec.reference_submission(instance["kernel_problem"])
         out = self._measure(code, instance, instance["dev"],
-                            self._timeout(instance, MIN_TIMEOUT_S))
+                            self._timeout(instance, MIN_TIMEOUT_S),
+                            check_correctness=False)
         if out["error"] or not out["solution"]:
             raise RuntimeError(
                 f"could not benchmark the reference kernel: {out['error']}")
@@ -110,8 +116,8 @@ class KernelBenchmark(Problem):
             errs = solution.get("errors") or ["correctness check failed"]
             return f"incorrect kernel: {errs[0]}"
         per_shape = solution.get("per_shape") or {}
-        missing = [spec.shape_label(c) for c in instance["dev"]
-                   if spec.shape_label(c) not in per_shape]
+        missing = [lbl for lbl in spec.shape_labels(instance["dev"])
+                   if lbl not in per_shape]
         if missing:
             return f"no timing produced for shape(s): {', '.join(missing)}"
         return None
@@ -123,7 +129,7 @@ class KernelBenchmark(Problem):
 
     def instance_stats(self, instance: dict) -> str:
         info = instance["backend_info"]
-        shapes = ", ".join(spec.shape_label(c) for c in instance["dev"])
+        shapes = ", ".join(spec.shape_labels(instance["dev"]))
         return (f"{instance['kernel_problem']} on {info['note']}. "
                 f"{len(instance['tests'])} correctness tests; "
                 f"benchmark shapes: {shapes}"
@@ -148,35 +154,42 @@ class KernelBenchmark(Problem):
 
     # ------------------------------------------------------------ execute
     def _measure(self, code: str, instance: dict, shapes: list[dict],
-                 timeout_s: int) -> dict:
+                 timeout_s: int, check_correctness: bool = True) -> dict:
         """Correctness first, then timing — the upstream order.
+
+        `check_correctness=False` skips the test pass for code we already know
+        is correct (the upstream reference), which the holdout phase would
+        otherwise re-prove at the cost of an extra torch-importing subprocess.
+        Never pass it for agent-written code.
 
         Returns {"solution"|None, "error"|None, "exec_time", "detail"}.
         """
         problem = instance["kernel_problem"]
         backend, gpu = instance["backend"], instance["gpu"]
         elapsed = 0.0
+        test_cases: list = []
 
         # 1. correctness on the official test shapes (cheap, fails fast)
-        t = runner.run(problem, code, "test", instance["tests"],
-                       max(MIN_TIMEOUT_S, instance.get("test_timeout") or 0),
-                       backend=backend, gpu=gpu)
-        elapsed += t["exec_time"]
-        if t["error"]:
-            return {"solution": None, "error": t["error"],
-                    "exec_time": round(elapsed, 3), "detail": None}
-        test_cases = t["tests"]
-        failures = [c for c in test_cases if c.get("status") != "pass"]
-        if t["check"] != "pass" or failures:
-            first = (failures[0].get("error") if failures
-                     else "correctness check failed")
-            return {
-                "solution": {"correct": False,
-                             "errors": [str(first)],
-                             "per_shape": {}, "tests": test_cases},
-                "error": None, "exec_time": round(elapsed, 3),
-                "detail": {"tests": test_cases, "benchmarks": []},
-            }
+        if check_correctness:
+            t = runner.run(problem, code, "test", instance["tests"],
+                           max(MIN_TIMEOUT_S, instance.get("test_timeout") or 0),
+                           backend=backend, gpu=gpu)
+            elapsed += t["exec_time"]
+            if t["error"]:
+                return {"solution": None, "error": t["error"],
+                        "exec_time": round(elapsed, 3), "detail": None}
+            test_cases = t["tests"]
+            failures = [c for c in test_cases if c.get("status") != "pass"]
+            if t["check"] != "pass" or failures:
+                first = (failures[0].get("error") if failures
+                         else "correctness check failed")
+                return {
+                    "solution": {"correct": False,
+                                 "errors": [str(first)],
+                                 "per_shape": {}, "tests": test_cases},
+                    "error": None, "exec_time": round(elapsed, 3),
+                    "detail": {"tests": test_cases, "benchmarks": []},
+                }
 
         # 2. timing on the benchmark shapes
         b = runner.run(problem, code, "benchmark", shapes, timeout_s,
@@ -199,8 +212,7 @@ class KernelBenchmark(Problem):
 
         per_shape = {}
         base = instance.get("baseline_per_shape") or {}
-        for case, result in zip(shapes, bench_cases):
-            label = spec.shape_label(case)
+        for label, result in zip(spec.shape_labels(shapes), bench_cases):
             entry = {k: result.get(k)
                      for k in ("mean", "std", "err", "best", "worst", "runs")}
             entry["spec"] = result.get("spec")
@@ -228,7 +240,8 @@ class KernelBenchmark(Problem):
             return None
         ref = spec.reference_submission(instance["kernel_problem"])
         t = self._timeout(instance, timeout_s)
-        base = self._measure(ref, instance, shapes, t)
+        base = self._measure(ref, instance, shapes, t,
+                             check_correctness=False)
         win = self._measure(code, instance, shapes, t)
         if base["error"] or not base["solution"]:
             return {"error": f"reference failed on held-out shapes: {base['error']}"}
@@ -241,8 +254,7 @@ class KernelBenchmark(Problem):
         rows, speedups = [], []
         bshapes = base["solution"]["per_shape"]
         wshapes = win["solution"]["per_shape"]
-        for case in shapes:
-            label = spec.shape_label(case)
+        for case, label in zip(shapes, spec.shape_labels(shapes)):
             bm = (bshapes.get(label) or {}).get("mean")
             wm = (wshapes.get(label) or {}).get("mean")
             sp = round(bm / wm, 4) if bm and wm else None
@@ -276,8 +288,7 @@ class KernelBenchmark(Problem):
         per_shape = (solution or {}).get("per_shape") or {}
         base = instance.get("baseline_per_shape") or {}
         pairs = []
-        for case in instance["dev"]:
-            label = spec.shape_label(case)
+        for case, label in zip(instance["dev"], spec.shape_labels(instance["dev"])):
             mean = (per_shape.get(label) or {}).get("mean")
             if mean and base.get(label):
                 pairs.append((_work(case), base[label] / mean))

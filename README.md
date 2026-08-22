@@ -252,6 +252,28 @@ python -m app.scripts.popcorn_submit <run_id> --leaderboard grayscale_v2 --gpu A
 
 Without `--yes` it is a dry run, because a leaderboard submission is public.
 
+## Tests
+
+```bash
+cd backend
+pip install pytest
+pytest tests -m "not slow"    # ~8s, no GPU and no API key needed
+pytest tests                  # adds the real-harness integration tests (~2 min)
+```
+
+The fast tests cover the pure logic the whole system rests on: the harness
+output parser, the case-file grammar, collision-free shape labelling, the
+geometric-mean score, the correctness gate, the dev/holdout split, the
+behaviour descriptor, MAP-Elites niching, DGM parent selection, the operator
+bandit, the AST fingerprint and the git DAG. The `slow` ones shell out to the
+real GPU MODE harness and assert that a fused kernel genuinely beats the
+reference and that a wrong one is rejected before it is ever timed.
+
+Two of these exist because the bugs happened: `test_budget_guard.py` replays
+the researcher turn that reached 1.5M input tokens and $4.66 on a $2 budget,
+and `test_harness_io.py` pins the shape labels that used to collide on
+conv2d_py and silently drop a measurement from the score.
+
 ## Adding a new problem
 
 Two levels:

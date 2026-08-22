@@ -15,3 +15,7 @@ numpy>=1.26
 # Optional: the Modal execution backend. Uncomment (or `pip install modal`)
 # to evaluate kernels on a real GPU.
 # modal>=0.64
+
+# Dev only: the test suite (pytest tests -m "not slow" skips the ones that
+# shell out to the real harness).
+# pytest>=8.0

@@ -75,5 +75,29 @@ def format_cases(cases: list[dict]) -> str:
 
 
 def shape_label(case: dict) -> str:
-    """Short human label for a shape, used as the per-case result key."""
+    """Short human label for a shape, ignoring the seed."""
     return "x".join(str(v) for k, v in case.items() if k != "seed") or "case"
+
+
+def shape_labels(cases: list[dict]) -> list[str]:
+    """Labels that are UNIQUE within this list, in order.
+
+    Some upstream suites benchmark the same shape under several seeds —
+    conv2d_py has two 256x16x128x2 entries — so the plain label collides. A
+    collision would silently drop a measurement from the score, the per-shape
+    table and the behaviour descriptor, so duplicates get their seed appended.
+    """
+    base = [shape_label(c) for c in cases]
+    seen = {}
+    for label in base:
+        seen[label] = seen.get(label, 0) + 1
+    out, used = [], {}
+    for label, case in zip(base, cases):
+        if seen[label] == 1:
+            out.append(label)
+            continue
+        used[label] = used.get(label, 0) + 1
+        seed = case.get("seed")
+        out.append(f"{label}@{seed}" if seed is not None
+                   else f"{label}#{used[label]}")
+    return out

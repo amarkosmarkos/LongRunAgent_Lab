@@ -50,26 +50,39 @@ class Program:
                 "name": self.name}
 
 
-def _bin(value: float, width: float, cap: int) -> int:
-    return min(cap, max(0, int(value / width)))
+def _log_bin(value: float, per_doubling: int, cap: int) -> int:
+    """Bin a MULTIPLICATIVE quantity (a speedup) on a log2 scale.
+
+    A linear bin saturates exactly where kernels get interesting: with a 0.25
+    width every result past 3x collapsed into the top bucket, so a 3x and a 12x
+    kernel shared a niche and the axis stopped separating anything. On a log
+    scale each doubling gets `per_doubling` buckets, so 1x / 2x / 4x / 16x stay
+    distinct all the way up.
+    """
+    if value is None or value <= 0:
+        return 0
+    return min(cap, max(0, int(round(math.log2(value) * per_doubling)) + cap // 2))
 
 
-# descriptor key -> (short label, bin width, max bin). Problems return whatever
-# descriptor makes sense for them; only the keys listed here become niche axes,
-# so adding a problem means adding its axes, not touching the population logic.
+# descriptor key -> (short label, buckets per doubling, max bin). Problems
+# return whatever descriptor makes sense for them; only the keys listed here
+# become niche axes, so adding a problem means adding its axes, not touching
+# the population logic. These are
+# speedups, so they are binned logarithmically: 2 buckets per doubling keeps
+# 1x, 1.4x, 2x, 2.8x, 4x … apart across the whole useful range.
 _NICHE_AXES = {
     # GPU kernels: HOW a kernel wins — on small shapes, on large ones, or evenly
-    "small_speedup": ("s", 0.25, 12),
-    "large_speedup": ("l", 0.25, 12),
-    "scaling": ("sc", 0.5, 8),
+    "small_speedup": ("s", 2, 16),
+    "large_speedup": ("l", 2, 16),
+    "scaling": ("sc", 2, 12),
 }
 
 
 def niche_key(p: Program) -> str:
     """Behavior bins when a descriptor exists, technique tags otherwise."""
     b = p.behavior or {}
-    parts = [f"{label}{_bin(b[key], width, cap)}"
-             for key, (label, width, cap) in _NICHE_AXES.items() if key in b]
+    parts = [f"{label}{_log_bin(b[key], per_doubling, cap)}"
+             for key, (label, per_doubling, cap) in _NICHE_AXES.items() if key in b]
     if parts:
         return "|".join(parts)
     return "+".join(p.tags) if p.tags else "unclassified"
@@ -136,7 +149,11 @@ class Population:
 
     def select_inspirations(self, k: int,
                             exclude_ids: set[str] | None = None) -> list[Program]:
-        """k-1 best elites from DISTINCT niches + 1 random non-elite oddball."""
+        """k-1 best elites from DISTINCT niches + 1 random non-elite oddball.
+
+        With no non-elite available the remaining slot goes to another elite,
+        so callers always get k programs when k exist.
+        """
         exclude = exclude_ids or set()
         with self._lock:
             elite_ids = set(self._elites.values())
@@ -150,6 +167,12 @@ class Population:
         picked = elites[:max(0, k - 1)]
         if others:
             picked.append(self.rng.choice(others))
+        elif len(picked) < k:
+            # Early in a run every program is an elite (each one opens a fresh
+            # niche), so there is no oddball to add. Backfill with the next
+            # elites instead of silently handing back fewer examples than
+            # asked for, precisely when examples are scarcest.
+            picked += [p for p in elites[len(picked):k]]
         return picked[:k]
 
     # --------------------------------------------------------------- reads
