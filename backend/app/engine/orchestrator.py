@@ -12,7 +12,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from .. import knowledge
 from ..bandit import OPERATORS, OperatorBandit
-from ..config import AGENT_MODELS, DATA_DIR, EXPERIMENTER_MODELS
+from ..config import (AGENT_MODELS, DATA_DIR, EXPERIMENTER_MODELS,
+                      ROLE_BUDGET_SHARE)
 from ..gitrepo import RunRepo
 from ..llm import LLMClient
 from ..models import Branch, Insight
@@ -80,8 +81,7 @@ class Orchestrator:
             "action": action or self._THINKING.get(role, "thinking"),
             "round": self.round or None,
         })
-        with self._lock:
-            budget_left = self.cfg["budget_usd"] - self.total_cost
+        budget_left = self._budget_for(role)
         res = self.llm.call(role, system, prompt, context, model=model,
                             budget_left_usd=budget_left)
         with self._lock:  # branches run in parallel — cost mutation must be atomic
@@ -111,6 +111,22 @@ class Orchestrator:
             "raw_response": res.text,
         })
         return res
+
+    def _budget_for(self, role: str) -> float:
+        """What this call may spend: the run's remaining budget, further
+        capped by the role's own share of it.
+
+        Preliminary phases are nice-to-have and must not be able to starve the
+        work the run exists to do. Without a share, a single researcher turn
+        could take the whole budget before one hypothesis had been proposed.
+        """
+        with self._lock:
+            remaining = self.cfg["budget_usd"] - self.total_cost
+            share = ROLE_BUDGET_SHARE.get(role)
+            if share is None:
+                return remaining
+            allowance = share * self.cfg["budget_usd"] - self.cost_by_agent.get(role, 0.0)
+        return max(0.0, min(remaining, allowance))
 
     def _active(self) -> list[Branch]:
         return [b for b in self.branches.values() if b.status == "active"]

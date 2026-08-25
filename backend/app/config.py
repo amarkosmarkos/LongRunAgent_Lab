@@ -121,3 +121,12 @@ WEB_SEARCH_MAX_USES = int(os.getenv("WEB_SEARCH_MAX_USES", "5"))
 # Hard ceiling on the context one agent turn may accumulate across tool
 # continuations. No legitimate turn comes close; the runaway hit 1.5M.
 MAX_CALL_INPUT_TOKENS = int(os.getenv("MAX_CALL_INPUT_TOKENS", "300000"))
+
+# Fraction of the RUN's total budget a role may ever spend. Preliminary,
+# nice-to-have phases must not be able to starve the work the run exists to do:
+# a researcher turn once spent a $2 budget before a single hypothesis existed,
+# and even bounded it would still have taken 63% of it. Roles absent from this
+# map are limited only by the run budget itself.
+ROLE_BUDGET_SHARE = {
+    "researcher": float(os.getenv("SHARE_RESEARCHER", "0.15")),
+}

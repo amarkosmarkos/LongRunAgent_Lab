@@ -99,7 +99,7 @@ class LLMClient:
                 spent = _price(model, in_tok, out_tok)
                 # the next round bills at least everything accumulated so far,
                 # and in practice rather more once fresh search results land,
-                # so project it at 2x before deciding we can afford another
+                # so project it at 3x before deciding we can afford another
                 if spent * 3 >= budget_left_usd:
                     over_budget = True
                     break
