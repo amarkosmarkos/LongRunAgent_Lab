@@ -233,12 +233,46 @@ harness output for both backends, so they are interchangeable:
 | backend | correctness | timings | setup |
 |---|---|---|---|
 | `local` | real | real, but **CPU timings** unless this machine has CUDA | none |
-| `modal` | real | real GPU (T4 / L4 / A100 / H100) | `pip install modal && modal setup`, then `modal deploy backend/app/kernels/modal_app.py` |
+| `modal` | real | real GPU (T4 / L4 / A100 / H100) | see below |
+
+```bash
+pip install modal
+modal token new                                     # opens a browser to authenticate
+modal deploy backend/app/kernels/modal_app.py       # one-off; builds the image
+modal run backend/app/kernels/modal_app.py          # smoke test: prints the GPU it got
+```
+
+`L4` is the default: modern, cheap per second, and ample for the pmpp shapes.
+The image is pinned and cached by Modal, and a warm container is kept between
+experiments (`scaledown_window`), so a run's dozens of evaluations pay the CUDA
+and torch import once rather than every call. Every remote result carries the
+GPU it actually ran on, its exit code, and its stderr.
 
 On a machine without CUDA the local backend rewrites `device='cuda'` in `reference.py`
 and no-ops `torch.cuda.synchronize` through an injected `sitecustomize.py`. That is the
 only source rewriting that ever happens, and every result is tagged with the backend it
 came from, so CPU numbers are never mistaken for GPU numbers.
+
+### Results are only comparable within their domain
+
+A runtime means nothing on its own: a 4&times; on grayscale/CPU and a 4&times; on
+conv2d/A100 are different facts. Every run computes an **evaluation domain** —
+benchmark, backend, hardware, and whether the reasoning was scripted — and the
+cross-run archive is scoped to it. A CPU smoke test cannot seed a GPU search, a
+different GPU cannot set its expectations, and a mock run's numbers never reach a
+real one (`archive_include_mock` is off). Every archive entry records its run id,
+domain and provenance.
+
+This is not hypothetical: a real run once read a scripted demo's 90.6% out of lab
+memory, concluded further gains were unlikely, set itself a 15% target against a
+configured 90%, and stopped after one round.
+
+### The run's objective is the operator's, not the Planner's
+
+`target_improvement_pct` in config is authoritative. The Planner still proposes a
+target and uses it to steer strategy, but it can only ever **raise** the bar, never
+lower it. `min_rounds` (default 3) additionally prevents the target from ending a
+supposedly long-running experiment in its first round.
 
 ### Validating against the official leaderboard
 

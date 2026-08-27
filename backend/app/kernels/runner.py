@@ -153,37 +153,78 @@ def run_local(problem: str, code: str, mode: str, cases: list[dict],
                 "backend": "local-cpu" if cpu else "local-gpu"}
 
 
+MODAL_APP = "longrun-kernel-lab"
+
+
 def run_modal(problem: str, code: str, mode: str, cases: list[dict],
-              timeout_s: int, gpu: str = "T4", seed: int = 42) -> dict:
+              timeout_s: int, gpu: str = "L4", seed: int = 42) -> dict:
     """Run the same harness on a real GPU through a deployed Modal function.
 
     Deploy it once with:  modal deploy backend/app/kernels/modal_app.py
+
+    The remote side returns stdout, stderr, an exit code and the GPU it ran on;
+    everything is parsed exactly as the local backend's output is, so a result
+    from here is interchangeable with a local one apart from the hardware it
+    names.
     """
     t0 = time.time()
+    label = f"modal-{gpu}"
     try:
         import modal
     except ImportError:
         return {"error": "the 'modal' package is not installed "
                          "(pip install modal) — cannot use the modal backend",
-                "exec_time": 0.0, "parsed": {}, "backend": f"modal-{gpu}"}
+                "exec_time": 0.0, "parsed": {}, "backend": label, "stderr": ""}
     try:
-        fn = modal.Function.from_name("longrun-kernel-lab", f"run_harness_{gpu.lower()}")
-        files = spec.source_files(problem)
-        files["submission.py"] = code
-        files["cases.txt"] = spec.format_cases(cases)
-        stdout = fn.remote(files=files, mode=mode, seed=seed, timeout_s=timeout_s)
+        fn = modal.Function.from_name(MODAL_APP, f"run_harness_{gpu.lower()}")
     except Exception as e:
-        return {"error": f"modal backend failed: {type(e).__name__}: {e}",
+        return {"error": f"modal function run_harness_{gpu.lower()} not found in "
+                         f"app '{MODAL_APP}' — deploy it with "
+                         f"`modal deploy backend/app/kernels/modal_app.py` "
+                         f"({type(e).__name__}: {e})",
                 "exec_time": round(time.time() - t0, 3), "parsed": {},
-                "backend": f"modal-{gpu}"}
+                "backend": label, "stderr": ""}
+
+    files = spec.source_files(problem)
+    files["submission.py"] = code
+    files["cases.txt"] = spec.format_cases(cases)
+    try:
+        out = fn.remote(files=files, mode=mode, seed=seed, timeout_s=timeout_s)
+    except Exception as e:
+        return {"error": f"modal call failed: {type(e).__name__}: {e}",
+                "exec_time": round(time.time() - t0, 3), "parsed": {},
+                "backend": label, "stderr": ""}
+
+    if not isinstance(out, dict):           # a deployment older than this code
+        return {"error": "the deployed modal function returned an unexpected "
+                         "shape — redeploy modal_app.py",
+                "exec_time": round(time.time() - t0, 3), "parsed": {},
+                "backend": label, "stderr": str(out)[:2000]}
+
+    stdout, stderr = out.get("stdout", ""), out.get("stderr", "")
     parsed = parse_harness_output(stdout)
-    return {"error": None if parsed else "harness produced no output on Modal",
-            "exec_time": round(time.time() - t0, 3), "parsed": parsed,
-            "backend": f"modal-{gpu}"}
+    # name the actual silicon, not just the requested tier
+    if out.get("gpu_name") and out["gpu_name"] != "unknown":
+        label = f"modal-{gpu}({out['gpu_name']})"
+
+    error = None
+    if out.get("timed_out"):
+        error = stderr or f"harness timed out after {timeout_s}s on {gpu}"
+    elif not parsed:
+        tail = (stderr or stdout or "").strip().splitlines()
+        error = (tail[-1] if tail else
+                 f"harness produced no output on {gpu} "
+                 f"(exit {out.get('returncode')})")
+    return {"error": error,
+            "exec_time": round(time.time() - t0, 3),
+            "remote_exec_time": out.get("exec_time"),
+            "parsed": parsed, "backend": label,
+            "stderr": stderr[-2000:], "returncode": out.get("returncode"),
+            "gpu_name": out.get("gpu_name"), "cuda": out.get("cuda")}
 
 
 def run(problem: str, code: str, mode: str, cases: list[dict], timeout_s: int,
-        backend: str = "local", gpu: str = "T4", seed: int = 42) -> dict:
+        backend: str = "local", gpu: str = "L4", seed: int = 42) -> dict:
     """Execute a submission and return the parsed harness result.
 
     Returns {error, exec_time, parsed, backend} plus, for convenience,
@@ -205,6 +246,28 @@ def _cuda_available() -> bool:
         return bool(torch.cuda.is_available())
     except Exception:
         return False
+
+
+def modal_ready() -> dict:
+    """Can this machine actually dispatch to Modal right now?"""
+    try:
+        import modal                                        # noqa: F401
+    except ImportError:
+        return {"ready": False, "reason": "the 'modal' package is not installed"}
+    try:
+        import modal
+        # from_name is lazy in modal 1.x — it returns a handle without talking
+        # to the API, so it succeeds even unauthenticated. hydrate() is what
+        # actually proves we can dispatch.
+        modal.Function.from_name(MODAL_APP, "run_harness_l4").hydrate()
+        return {"ready": True, "reason": "deployed"}
+    except Exception as e:
+        hint = ("Run `modal token new` to authenticate, then "
+                "`modal deploy backend/app/kernels/modal_app.py`.")
+        if "Token missing" in str(e) or "AuthError" in type(e).__name__:
+            hint = "Not authenticated. Run `modal token new`, then deploy."
+        return {"ready": False, "reason": f"{type(e).__name__}: {e}",
+                "hint": hint}
 
 
 def backend_info(backend: str, gpu: str) -> dict:

@@ -276,6 +276,22 @@ class KernelBenchmark(Problem):
             },
         }
 
+    def evaluation_domain(self, instance: dict) -> dict:
+        """A kernel timing means nothing without the kernel and the silicon.
+
+        A 4x speedup on grayscale/CPU and a 4x on conv2d/A100 are different
+        facts; treating them as one incumbent is how CPU smoke tests would
+        poison a GPU search.
+        """
+        info = instance["backend_info"]
+        return {
+            "problem": self.name,
+            "kernel": instance["kernel_problem"],
+            "backend": info["backend"],
+            "hardware": info["gpu"],
+            "timings_are_gpu": bool(info["timings_are_gpu"]),
+        }
+
     # ------------------------------------------------------------ behavior
     def behavior_descriptor(self, instance: dict, solution,
                             exec_time: float, timeout_s: int) -> dict | None:

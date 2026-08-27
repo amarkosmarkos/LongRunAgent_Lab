@@ -62,6 +62,29 @@ _STOP = frozenset(
     "then than when while each per all any some more most very".split())
 
 
+# Domain fields that make two measurements comparable, in key order. A run's
+# own Problem supplies them (Problem.evaluation_domain); the archive only has
+# to keep results from different domains apart.
+_DOMAIN_FIELDS = ("problem", "kernel", "backend", "hardware")
+
+
+def domain_key(domain: dict) -> str:
+    """Stable identifier for one evaluation domain."""
+    parts = [str(domain.get(f)) for f in _DOMAIN_FIELDS if domain.get(f) is not None]
+    key = "/".join(parts) or "unknown"
+    # scripted runs are a separate world: their numbers come from hand-written
+    # code, so they are evidence about the loop, never about the kernel
+    return ("mock:" + key) if domain.get("mock") else key
+
+
+def same_domain(entry: dict, domain: dict) -> bool:
+    """Is an archived result comparable with what this run is measuring?"""
+    stored = entry.get("domain")
+    if not stored:
+        return False          # pre-provenance entries: provenance unknown
+    return domain_key(stored) == domain_key(domain)
+
+
 def technique_tags(code: str | None, *extra_texts: str | None) -> list[str]:
     """Name the algorithmic techniques present in a solver (code + hypothesis)."""
     blob = " ".join(t for t in (code, *extra_texts) if t)
@@ -148,18 +171,26 @@ class KnowledgeArchive:
             except (json.JSONDecodeError, OSError):
                 continue
             if results is not None:
-                self.ingest_run(run_id, problem, results, insights, save=False)
+                # pre-provenance runs: recorded, but never comparable with a
+                # domain-tagged run, so they cannot seed or steer one
+                self.ingest_run(run_id, {"problem": problem, "legacy": True},
+                                results, insights, save=False)
         self._save()
 
     # -------------------------------------------------------------- ingest
-    def ingest_run(self, run_id: str, problem: str, results: dict,
+    def ingest_run(self, run_id: str, domain: dict, results: dict,
                    insights: list[str], save: bool = True) -> dict:
         """Archive a concluded run: the winning solver competes for its niche,
-        insights join the shared pool. Returns what actually changed."""
+        insights join the shared pool. Returns what actually changed.
+
+        `domain` records HOW the run was measured (benchmark, backend,
+        hardware, scripted-or-real). Niches are scoped to it, so a CPU smoke
+        test and a real GPU run never compete for the same incumbent.
+        """
         code = results.get("winner_code")
         imp = results.get("improvement_pct")
         tags = technique_tags(code, results.get("winner_branch_name"))
-        niche = f"{problem}::" + ("+".join(tags) if tags else "unclassified")
+        niche = f"{domain_key(domain)}::" + ("+".join(tags) if tags else "unclassified")
         outcome = {"solver_added": False, "niche": niche, "insights_added": 0}
         with self._lock:
             if run_id in self._data["ingested_runs"]:
@@ -172,7 +203,9 @@ class KnowledgeArchive:
                     holdout = (results.get("holdout") or {}).get("summary") or {}
                     self._data["solvers"][niche] = {
                         "run_id": run_id,
-                        "problem": problem,
+                        "domain": dict(domain),
+                        "mock": bool(domain.get("mock")),
+                        "problem": domain.get("problem"),
                         "name": results.get("winner_branch_name"),
                         "techniques": tags,
                         "score": results.get("best_score"),
@@ -185,7 +218,9 @@ class KnowledgeArchive:
             known = {i["text"] for i in self._data["insights"]}
             for text in insights:
                 if text and text not in known:
-                    self._data["insights"].append({"text": text, "run_id": run_id})
+                    self._data["insights"].append(
+                        {"text": text, "run_id": run_id,
+                         "domain": dict(domain), "mock": bool(domain.get("mock"))})
                     known.add(text)
                     outcome["insights_added"] += 1
             self._data["insights"] = self._data["insights"][-MAX_INSIGHTS:]
@@ -200,16 +235,23 @@ class KnowledgeArchive:
                 "insights": len(self._data["insights"]),
                 "runs": len(self._data["ingested_runs"])}
 
-    def recall(self, problem: str, query: str,
+    def recall(self, domain: dict, query: str,
                k_solvers: int = RECALL_SOLVERS,
-               k_insights: int = RECALL_INSIGHTS) -> dict | None:
-        """Retrieve the archive knowledge most relevant to a new run: the
-        strongest elites for this problem plus the top-k relevant insights.
-        Returns None when the archive has nothing to offer."""
+               k_insights: int = RECALL_INSIGHTS,
+               include_mock: bool = False) -> dict | None:
+        """Retrieve archive knowledge COMPARABLE with what this run measures.
+
+        Only entries from the same evaluation domain are returned: a previous
+        run's 10x on CPU says nothing about what is achievable on an A100, and
+        feeding it to the Planner is how a scripted demo ends up setting a real
+        run's expectations.
+        """
         with self._lock:
             elites = [s for s in self._data["solvers"].values()
-                      if not problem or s.get("problem") in ("", problem)]
-            insights = list(self._data["insights"])
+                      if same_domain(s, domain)
+                      and (include_mock or not s.get("mock"))]
+            insights = [i for i in self._data["insights"]
+                        if include_mock or not i.get("mock")]
         elites.sort(key=lambda s: -(s.get("improvement_pct") or 0))
         elites = elites[:k_solvers]
         idx = rank(query, [i["text"] for i in insights], k_insights)
@@ -223,14 +265,15 @@ class KnowledgeArchive:
             "archive_size": self.size(),
         }
 
-    def recall_seed_programs(self, problem: str, k: int = RECALL_SOLVERS) -> list[dict]:
+    def recall_seed_programs(self, domain: dict, k: int = RECALL_SOLVERS,
+                             include_mock: bool = False) -> list[dict]:
         """Elite solvers WITH their code, for seeding a new run's population —
         past winners re-enter the gene pool as first-class parents instead of
         being reduced to a prompt digest."""
         with self._lock:
             elites = [s for s in self._data["solvers"].values()
-                      if s.get("code") and
-                      (not problem or s.get("problem") in ("", problem))]
+                      if s.get("code") and same_domain(s, domain)
+                      and (include_mock or not s.get("mock"))]
         elites.sort(key=lambda s: -(s.get("improvement_pct") or 0))
         return [{"name": s.get("name"), "code": s["code"],
                  "improvement_pct": s.get("improvement_pct"),

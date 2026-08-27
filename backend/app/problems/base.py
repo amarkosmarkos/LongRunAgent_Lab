@@ -48,6 +48,16 @@ class Problem(ABC):
         a run. Return a JSON-serializable report, or None if not supported."""
         return None
 
+    def evaluation_domain(self, instance: dict) -> dict:
+        """What makes two measurements comparable.
+
+        Scores are only meaningful against other scores produced the same way.
+        Anything that changes what a number MEANS — the benchmark, the
+        hardware, the execution backend — belongs here, so cross-run memory
+        can refuse to mix incomparable results. Keys must be JSON-scalar.
+        """
+        return {"problem": self.name}
+
     def behavior_descriptor(self, instance: dict, solution,
                             exec_time: float, timeout_s: int) -> dict | None:
         """Describe what a valid solution BEHAVES like (not what its code says):

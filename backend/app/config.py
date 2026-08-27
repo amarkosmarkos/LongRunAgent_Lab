@@ -60,7 +60,9 @@ DEFAULT_RUN_CONFIG = {
         #             correctness; GPU timings only if this box has CUDA)
         # "modal"  -> the same harness on a real GPU (see kernels/modal_app.py)
         "backend": "local",
-        "gpu": "T4",
+        # L4 is the sensible first GPU: modern (Ada), cheap per second, and
+        # ample for the pmpp shapes. A100/H100 only pay off on far bigger work.
+        "gpu": "L4",
         # benchmark shapes kept aside to expose shape-overfitting at the end
         "holdout_count": 3,
     },
@@ -88,6 +90,14 @@ DEFAULT_RUN_CONFIG = {
     # explore and combine — the same intent the TSP target had.
     "target_improvement_pct": 90.0,
     "stagnation_rounds": 2,
+    # A long-running experiment must actually run: the target cannot end the
+    # run before this many rounds, however early it is met. Configuration is
+    # the authoritative stopping policy; the Planner may raise the bar but
+    # never lower it (see Orchestrator._target_pct).
+    "min_rounds": 3,
+    # Scripted (mock) runs stay out of real optimization memory by default —
+    # their numbers describe hand-written code, not what agents can achieve.
+    "archive_include_mock": False,
     # ---- evolution substrate (git DAG + population) ----
     # every attempt becomes a real git commit in data/runs/<id>/repo
     "enable_git_repo": True,
@@ -120,7 +130,7 @@ MAX_TOOL_CONTINUATIONS = int(os.getenv("MAX_TOOL_CONTINUATIONS", "3"))
 WEB_SEARCH_MAX_USES = int(os.getenv("WEB_SEARCH_MAX_USES", "5"))
 # Hard ceiling on the context one agent turn may accumulate across tool
 # continuations. No legitimate turn comes close; the runaway hit 1.5M.
-MAX_CALL_INPUT_TOKENS = int(os.getenv("MAX_CALL_INPUT_TOKENS", "300000"))
+MAX_CALL_INPUT_TOKENS = int(os.getenv("MAX_CALL_INPUT_TOKENS", "80000"))
 
 # Fraction of the RUN's total budget a role may ever spend. Preliminary,
 # nice-to-have phases must not be able to starve the work the run exists to do:

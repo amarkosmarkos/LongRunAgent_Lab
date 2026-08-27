@@ -48,6 +48,11 @@ class Orchestrator:
         self.round = 0
         self._lock = threading.Lock()  # guards cost + insights across parallel branches
         # ---- evolution substrate: git DAG + population + novelty + bandit ----
+        # What this run's numbers MEAN: benchmark, backend, hardware, and
+        # whether the reasoning was scripted. Cross-run memory is scoped to it
+        # so incomparable results never seed or steer each other.
+        self.domain = {**self.problem.evaluation_domain(self.instance),
+                       "mock": bool(self.llm.mock)}
         self.rng = random.Random(run.id)  # deterministic per run
         self.repo: RunRepo | None = None
         self.population: Population | None = None
@@ -148,6 +153,28 @@ class Orchestrator:
             if b.best_score is not None and (best_s is None or b.best_score < best_s):
                 best_b, best_s = b, b.best_score
         return best_b, best_s
+
+    def _target_pct(self) -> float:
+        """The run's objective. Configuration is authoritative.
+
+        The Planner may set its own target and use it to steer strategy, but it
+        cannot lower the bar the operator asked for: a run once read a stale
+        number out of lab memory, set itself 15% against a configured 90%, and
+        cleared it in round one. Its target can only ever be raised.
+        """
+        configured = float(self.cfg["target_improvement_pct"])
+        planned = (self.scope.get("success_criteria") or {}).get(
+            "target_improvement_pct")
+        try:
+            planned = float(planned)
+        except (TypeError, ValueError):
+            return configured
+        return max(configured, planned)
+
+    def _may_stop_on_target(self, rnd: int) -> bool:
+        """A long-running experiment has to actually run. Hitting the target in
+        the first round means the bar was too low, not that the work is done."""
+        return rnd >= int(self.cfg.get("min_rounds", 1) or 1)
 
     def _improvement_pct(self, score: float | None) -> float | None:
         if score is None:
@@ -264,7 +291,9 @@ class Orchestrator:
         seeded = 0
         if self.cfg.get("enable_knowledge_archive", True):
             try:
-                seeds = knowledge.ARCHIVE.recall_seed_programs(self.problem.name)
+                seeds = knowledge.ARCHIVE.recall_seed_programs(
+                    self.domain,
+                    include_mock=self.cfg.get("archive_include_mock", False))
             except Exception:
                 seeds = []
             for i, s in enumerate(seeds):
@@ -297,7 +326,9 @@ class Orchestrator:
             return
         try:
             query = f"{self.problem.description} {self.problem.instance_stats(self.instance)}"
-            recall = knowledge.ARCHIVE.recall(self.problem.name, query)
+            recall = knowledge.ARCHIVE.recall(
+                self.domain, query,
+                include_mock=self.cfg.get("archive_include_mock", False))
             if recall:
                 self.memory = knowledge.KnowledgeArchive.as_prompt(recall)
                 self.run.emit("knowledge.recalled", agent="archivist",
@@ -384,12 +415,17 @@ class Orchestrator:
                 return "all branches closed"
             self._run_round(active, rnd)           # experiments IN PARALLEL (barrier)
             _, best = self._best_overall()
-            target = self.scope.get("success_criteria", {}).get(
-                "target_improvement_pct", self.cfg["target_improvement_pct"])
+            target = self._target_pct()
             imp = self._improvement_pct(best)
             self._supervise(rnd)                   # prune: collapse / merge
             if imp is not None and imp >= target:
-                return f"target improvement reached ({imp}% >= {target}%)"
+                if self._may_stop_on_target(rnd):
+                    return f"target improvement reached ({imp}% >= {target}%)"
+                self.run.emit("target.held", payload={
+                    "round": rnd, "min_rounds": self.cfg.get("min_rounds"),
+                    "improvement_pct": imp, "target_pct": target,
+                    "note": "target already met, but the run continues until "
+                            "min_rounds so the search is given a real chance"})
             # the Planner reviews the round's output and designs NEW hypotheses
             if not self._planner_review(rnd, best, target):
                 return "planner concluded the run"
@@ -861,8 +897,12 @@ class Orchestrator:
             "baseline_score": self.baseline_score,
             "best_score": best,
             "improvement_pct": self._improvement_pct(best),
-            "target_improvement_pct": self.scope.get("success_criteria", {}).get(
-                "target_improvement_pct", self.cfg["target_improvement_pct"]),
+            "target_improvement_pct": self._target_pct(),
+            "target_configured_pct": float(self.cfg["target_improvement_pct"]),
+            "target_planner_pct": (self.scope.get("success_criteria") or {}).get(
+                "target_improvement_pct"),
+            "min_rounds": self.cfg.get("min_rounds"),
+            "domain": self.domain,
             "total_cost_usd": round(self.total_cost, 6),
             "cost_by_agent": {k: round(v, 6) for k, v in self.cost_by_agent.items()},
             "cost_by_branch": {b.id: round(b.cost_usd, 6)
@@ -918,7 +958,7 @@ class Orchestrator:
         if self.cfg.get("enable_knowledge_archive", True):
             try:
                 outcome = knowledge.ARCHIVE.ingest_run(
-                    self.run.id, self.problem.name, results,
+                    self.run.id, self.domain, results,
                     [i.text for i in self.insights])
                 self.run.emit("knowledge.archived", agent="archivist",
                               payload=outcome)
